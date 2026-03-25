@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
-    database_url: str = "sqlite:///./paper_trader.db"
+    database_url: str = "sqlite:///./jub_paper_trader.db"
 
     alpaca_api_key: str = ""
     alpaca_api_secret: str = ""
@@ -23,6 +23,6 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-@lru_cache()
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
