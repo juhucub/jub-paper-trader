@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 
 from backend.core.settings import Settings, get_settings
+from db.base import SessionLocal
+
 from services.alpaca_client import AlpacaClient
 from services.alpaca_data import AlpacaDataClient
 from services.portfolio_engine import PortfolioEngine
@@ -29,7 +31,11 @@ def build_container() -> AppContainer:
         data_url=settings.alpaca_data_url,
     )
     risk_guardrails = RiskGuardrails()
-    portfolio_engine = PortfolioEngine( alpaca_client=alpaca_client, risk_guardrails=risk_guardrails)
+    portfolio_engine = PortfolioEngine( 
+        alpaca_client=alpaca_client, 
+        risk_guardrails=risk_guardrails,
+        db_session=SessionLocal
+    )
 
     return AppContainer(
         settings=settings,
