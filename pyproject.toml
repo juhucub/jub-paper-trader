@@ -27,6 +27,7 @@ packages = [
   "agent_service.interfaces",
   "db",
   "db.models",
+  "db.repositories",
   "db.migrations",
   "services",
   "scheduler",

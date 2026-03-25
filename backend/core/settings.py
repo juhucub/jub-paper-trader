@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     alpaca_api_key: str = ""
     alpaca_api_secret: str = ""
-    alpaca_base_url: str = "https://paper-api.alpaca.markets"
+    alpaca_base_url: str = "https://paper-api.alpaca.markets/v2"
     alpaca_data_url: str = "https://data.alpaca.markets"
 
     #llm_provider
