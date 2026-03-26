@@ -1,7 +1,7 @@
 #Portfolkio snapshot persistence model
 
 from __future__ import annotations
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import Integer, String, Float, DateTime, JSON, UniqueConstraint
@@ -11,7 +11,7 @@ from db.base import Base
 
 def utc_now() -> datetime:
     """Helper for UTC timestamps."""
-    return datetime.now(UTC)
+    return datetime.now(timezone.utc)
 
 class PortfolioSnapshot(Base):
     __tablename__ = "portfolio_snapshots"
