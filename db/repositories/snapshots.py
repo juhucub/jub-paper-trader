@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from db.models.snapshots import MarketDataSnapshot, utc_now
+from db.models.snapshots import BotCycleSnapshot, MarketDataSnapshot, utc_now
 
 
 def upsert_market_data_snapshot(
@@ -66,3 +66,14 @@ def upsert_market_data_snapshot(
     db_session.commit()
     db_session.refresh(created)
     return created
+
+def create_bot_cycle_snapshot(
+    db_session: Session,
+    cycle_id: str,
+    payload: dict[str, Any],
+) -> BotCycleSnapshot:
+    snapshot = BotCycleSnapshot(cycle_id=cycle_id, payload=payload)
+    db_session.add(snapshot)
+    db_session.commit()
+    db_session.refresh(snapshot)
+    return snapshot

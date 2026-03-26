@@ -40,3 +40,11 @@ class MarketDataSnapshot(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)  # raw market data payload
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+class BotCycleSnapshot(Base):
+    __tablename__ = "bot_cycle_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cycle_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
