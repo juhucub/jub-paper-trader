@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     alpaca_base_url: str = "https://paper-api.alpaca.markets/v2"
     alpaca_data_url: str = "https://data.alpaca.markets"
 
+    bot_symbols: str = "AAPL,MSFT,GOOG,AMZN,TSLA,NVDA"
+    bot_cycle_interval_seconds: int = 60
     #llm_provider
     #llm_model
     #max_reasoning_tokens
