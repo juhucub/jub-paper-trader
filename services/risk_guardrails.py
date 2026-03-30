@@ -14,7 +14,7 @@ class RiskGuardrails:
     #avoid low price, e.g. high volatility, low liquidity, and manipulation prone
     min_price: float = 1.0
     #Enter/exit no major slippage
-    min_avg_dollar_volume: float = 2_000_000.0
+    min_avg_dollar_volume: float = 100_000.0
     cooldown_after_losses: int = 3
     cooldown_minutes: int = 30
     #in memory loss timestamps

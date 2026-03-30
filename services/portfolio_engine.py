@@ -120,11 +120,18 @@ class PortfolioEngine:
             order = existing or Order(
                 broker_owner_id=broker_id,
                 symbol=str(item["symbol"]).upper(),
-                side=str(item["side", "buy"]).lower(),
+                side=str(item.get("side", "buy")).lower(),
                 quantity=float(item.get("qty", item.get("quantity", 0))),
             )
             order.status = str(item.get("status", order.status))
-            order.filled_quantity = float(item.get("filled_qty", item.get("filled_quantity", order.filled_quantity)))
+            filled_qty = (
+                item.get("filled_qty")
+                or item.get("filled_quantity")
+                or order.filled_quantity
+                or 0.0
+            )
+            order.filled_quantity = float(filled_qty)
+            
             filled_avg = item.get("filled_avg_price")
             order.filled_avg_price = float(filled_avg) if filled_avg is not None else order.filled_avg_price
             order.updated_at = datetime.now(timezone.utc)

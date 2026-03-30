@@ -1,6 +1,22 @@
 from statistics import mean
 from typing import Any
 
+def _fmt_float(value: Any, decimals: int = 2) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):,.{decimals}f}"
+
+
+def _fmt_optional(value: Any) -> str:
+    return "n/a" if value is None else str(value)
+
+
+def _normalize_reason(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return str(value).replace("_", " ")
+
+
 def summarize_symbol_decision(symbol: str, bars: list[dict], quote: dict) -> dict[str, Any]:
     closes = [float(bar["c"]) for bar in bars if bar.get("c") is not None]
     volumes = [float(bar.get("v", 0.0)) for bar in bars]
@@ -13,9 +29,9 @@ def summarize_symbol_decision(symbol: str, bars: list[dict], quote: dict) -> dic
 
     ap = quote.get("ap")
     bp = quote.get("bp")
-    mid = ((ap + bp) / 2.0) if ap and bp else None
-    spread = (ap - bp) if ap and bp else None
-    spread_pct = ((ap - bp) / bp * 100.0) if ap and bp and bp > 0 else None
+    mid = ((ap + bp) / 2.0) if ap is not None and bp is not None else None
+    spread = (ap - bp) if ap is not None and bp is not None else None
+    spread_pct = ((ap - bp) / bp * 100.0) if ap is not None and bp is not None and bp > 0 else None
 
     return {
         "symbol": symbol,
@@ -44,23 +60,32 @@ def summarize_symbol_decision(symbol: str, bars: list[dict], quote: dict) -> dic
     }
 
 def print_symbol_summary(summary: dict) -> None:
+    spread_pct = summary.get("spread_pct")
+    spread_pct_display = f"{_fmt_float(spread_pct, 3)}%" if spread_pct is not None else "n/a"
+    signal = summary.get("signal")
+    signal_display = _fmt_float(signal, 6) if signal is not None else "n/a"
+    target_weight = summary.get("target_weight")
+    target_weight_display = _fmt_float(target_weight, 4) if target_weight is not None else "n/a"
+
+    blocked_by = summary.get("blocked_reason")
+    decision_reason = summary.get("decision_reason")
     print("\n=== BOT DECISION SUMMARY ===")
     print(f"Symbol:       {summary['symbol']}")
     print(f"Bars:         {summary['bar_count']}")
-    print(f"First close:  {summary['first_close']:.2f}")
-    print(f"Last close:   {summary['last_close']:.2f}")
-    print(f"Range:        {summary['min_close']:.2f} - {summary['max_close']:.2f}")
-    print(f"Avg close:    {summary['avg_close']:.2f}")
-    print(f"Avg volume:   {summary['avg_volume']:.2f}")
-    print(f"Bid / Ask:    {summary['bid']} / {summary['ask']}")
-    print(f"Mid price:    {summary['mid']}")
-    print(f"Spread:       {summary['spread']}")
-    print(f"Spread %:     {summary['spread_pct']}")
-    print(f"Quote time:   {summary['quote_time']}")
-    print(f"Signal:       {summary['signal']}")
-    print(f"Target wt:    {summary['target_weight']}")
-    print(f"Order side:   {summary['candidate_order_side']}")
-    print(f"Order qty:    {summary['candidate_order_qty']}")
-    print(f"Status:       {summary['decision_status']}")
-    print(f"Reason:       {summary['decision_reason']}")
-    print(f"Blocked by:   {summary['blocked_reason']}")
+    print(f"First close:  {_fmt_float(summary['first_close'])}")
+    print(f"Last close:   {_fmt_float(summary['last_close'])}")
+    print(f"Range:        {_fmt_float(summary['min_close'])} - {_fmt_float(summary['max_close'])}")
+    print(f"Avg close:    {_fmt_float(summary['avg_close'])}")
+    print(f"Avg volume:   {_fmt_float(summary['avg_volume'])}")
+    print(f"Bid / Ask:    {_fmt_float(summary['bid'])} / {_fmt_float(summary['ask'])}")
+    print(f"Mid price:    {_fmt_float(summary['mid'])}")
+    print(f"Spread:       {_fmt_float(summary['spread'])}")
+    print(f"Spread %:     {spread_pct_display}")
+    print(f"Quote time:   {_fmt_optional(summary['quote_time'])}")
+    print(f"Signal:       {signal_display}")
+    print(f"Target wt:    {target_weight_display}")
+    print(f"Order side:   {_fmt_optional(summary['candidate_order_side'])}")
+    print(f"Order qty:    {_fmt_float(summary['candidate_order_qty'], 4)}")
+    print(f"Status:       {_fmt_optional(summary['decision_status'])}")
+    print(f"Reason:       {_normalize_reason(decision_reason)}")
+    print(f"Blocked by:   {_normalize_reason(blocked_by)}")
