@@ -25,13 +25,13 @@ pip install -e .
 Single validation cycle:
 
 ```bash
-jub-bot --symbols AAPL,MSFT,NVDA --once
+python -m scheduler.runner --symbols AAPL,MSFT,NVDA --once
 ```
 
 Continous min-by-min loop:
 
 ```bash
-jub-bot --symbols AAPL,MSFT,NVDA --interval-seconds 60
+python -m scheduler.runner --symbols AAPL,MSFT,NVDA --interval-seconds 60
 ```
 
 # 4) Run API

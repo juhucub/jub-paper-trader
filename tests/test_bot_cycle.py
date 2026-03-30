@@ -130,3 +130,23 @@ def test_bot_cycle_persists_snapshot_submits_orders_and_reconciles():
     assert account is not None
     _ = session.query(Position).all()
     _ = session.query(Order).all()
+
+def test_bot_cycle_sets_reason_when_all_signals_non_positive():
+    service, _, _ = _build_service()
+
+    result = service.run_cycle(["MSFT"])
+
+    assert result["submitted_orders"] == []
+    assert result["blocked_orders"] == []
+    assert result["no_trade_reason"] == "NO_TRADES:all_signals_non_positive"
+
+
+def test_bot_cycle_sets_reason_when_all_candidates_blocked():
+    service, _, _ = _build_service()
+    service.risk_guardrails = RiskGuardrails(min_avg_dollar_volume=1.0, max_position_pct=0.0001)
+
+    result = service.run_cycle(["AAPL"])
+
+    assert result["submitted_orders"] == []
+    assert len(result["blocked_orders"]) >= 1
+    assert result["no_trade_reason"] == "NO_TRADES:all_candidates_blocked"

@@ -12,6 +12,17 @@ from db.models.snapshots import utc_now
 
 from db.repositories.snapshots import upsert_market_data_snapshot
 
+""" DATA API
+ap - ask price
+bp - bid price
+as - ask size
+bs - bid size
+ax - ask exchange
+bx - bid exchange
+c - conditions
+t - timestamp
+z - tape (venue code)
+"""
 @dataclass(slots=True)
 class AlpacaDataClient:
     api_key: str
@@ -29,7 +40,6 @@ class AlpacaDataClient:
             "APCA-API-SECRET-KEY": self.api_secret,
         }
 
-    
     def close(self) -> None:
         self._client.close()
         
@@ -72,7 +82,9 @@ class AlpacaDataClient:
             params=params,
         )
         response.raise_for_status()
-        return response.json().get("bars", [])
+
+        data = response.json()
+        return data.get("bars") or []
 
     def get_market_clock(self) -> dict[str, Any]:
         response = self._client.get(f"{self.trading_url}/v2/clock", headers=self._headers)

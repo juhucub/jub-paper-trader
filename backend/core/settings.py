@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     env: str = "dev"
     debug: bool = True
+    debug_bot_cycle: bool = True
     log_level: str = "INFO"
 
     api_host: str = "0.0.0.0"

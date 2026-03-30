@@ -17,7 +17,7 @@ class RebalanceDelta:
 
 @dataclass(slots=True)
 class ExecutionRouter:
-    min_trade_notional: float = 25.0
+    min_trade_notional: float = 20.0
 
     def to_rebalance_deltas(
         self,
