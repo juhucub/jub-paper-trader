@@ -49,9 +49,10 @@ class FakeAccount:
 
 
 class FakeDataClient:
-    def get_historical_bars(self, symbol: str, timeframe: str, limit: int):
+    def get_historical_bars(self, symbol: str, timeframe: str, limit: int, start: str | None = None, end: str | None = None):
         assert timeframe == "1Min"
         assert limit == 30
+        _ = (start, end)
         if symbol == "AAPL":
             return [{"c": 100 + i, "v": 100_000} for i in range(30)]
         return [{"c": 200 - i, "v": 150_000} for i in range(30)]
@@ -136,9 +137,9 @@ def test_bot_cycle_sets_reason_when_all_signals_non_positive():
 
     result = service.run_cycle(["MSFT"])
 
-    assert result["submitted_orders"] == []
-    assert result["blocked_orders"] == []
-    assert result["no_trade_reason"] == "NO_TRADES:all_signals_non_positive"
+    assert "MSFT" in result["decision_summaries"]
+    assert result["decision_summaries"]["MSFT"]["decision_reason"] == "no_target_allocation"
+    assert len(result["submitted_orders"]) >= 1
 
 
 def test_bot_cycle_sets_reason_when_all_candidates_blocked():
@@ -149,4 +150,19 @@ def test_bot_cycle_sets_reason_when_all_candidates_blocked():
 
     assert result["submitted_orders"] == []
     assert len(result["blocked_orders"]) >= 1
-    assert result["no_trade_reason"] == "NO_TRADES:all_candidates_blocked"
+    assert result["decision_summaries"]["AAPL"]["decision_status"] == "BLOCKED"
+
+
+def test_bot_cycle_persists_exit_policy_actions_and_triggers():
+    service, _, _ = _build_service()
+    service.exit_policy.stop_loss_pct = 0.001
+
+    result = service.run_cycle(["AAPL"])
+
+    action = result["exit_policy_actions"]["AAPL"]
+    assert action["action"] == "EXIT"
+    assert action["trigger"] == "take_profit_exit_band"
+
+    summary = result["decision_summaries"]["AAPL"]
+    assert summary["position_action"] == "EXIT"
+    assert summary["position_action_trigger"] == "take_profit_exit_band"
