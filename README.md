@@ -20,7 +20,7 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-# 3) Run the bot against Alpaca paper account
+## 3) Run the bot against Alpaca paper account
 
 Single validation cycle:
 
@@ -34,56 +34,122 @@ Continous min-by-min loop:
 python -m scheduler.runner --symbols AAPL,MSFT,NVDA --interval-seconds 60
 ```
 
-# 4) Run API
+## 4) Run API
 
 ```bash
 uvicorn backend.map:app --reload
 ```
 
-# 5) Visualization Code Flow GOAL
+## 5) Visualization Code Flow GOAL
 
-1) Market Data - alpaca_data.py
-    -Instantiate Symbol With Raw Market Data
+### 1) Raw Market Data - alpaca_data.py
+-Instantiate Symbol With Raw Market Data
 
-    Inputs:
-1) Market Data - alpaca_data.py
-    -Analyze each independent symbol
+Inputs:
 
-    ```bash
-        signal_i = f(features_i)
-    ```
+    * Price bars (Open, High, Low, Close, Volume)
+    * Tick data (every trade)
+    * VWAP (Volume-Weighted Average Price)
+    * Quotes (bid/ask)
+    * Trade Stamps (Price, Size, Timestamp)
+    * Fundamentals (optional)
+    * News/alt data (sentiment)
 
-    ```bash
-        features_i = [
-            momentum_i,
-            mean_reversion_i,
-            volatility_i,
-            liquidity_i,
-            ...
-        ]
-    ```
+These help define our feature vector by calculating:
+    returns, volatility, momentum
 
-2) Signal Engine - 
-    -Normalize across all stocks by ranking:
+    features_i = [
+        ...
+    ]
+    
+### 2) Clean Market Data - data_processor.py
+-Analyze each independent symbol
 
-    ```bash
-        z_score_i = (signal_i - mean(signals)) / std(signals)
-    ```
+    *Clean data
+    *Align timestamps
+    *Normalize units
+    *Ensure low latency and completeness of symbols Market Data 
+
+### 3) Feature Engineering - feature_vector.py
+-Cleaned, raw data is transformed into signals (features) 
+
+For each stock i:
+
+    *Compute features_i:
+        - Momentum (Trend Strength)
+        - Mean Reversion (Overbought / Oversold)
+        - Volatility (Risk / Uncertainty)
+        - Liquidity (Can we actually trade it?)
+        - Bid-Ask Spread 
+        - Volume Trend (Participation)
+        - Returns
+        - Sentiment Scores
+
+```bash
+    features_i = [
+        momentum_i,
+        mean_reversion_i,
+        volatility_i,
+        liquidity_i,
+        ...
+    ]
+```
+### 4) Signal Generation (alpha model) - signals.py
+-Model takes feature vectors and outputs signals
+
+Input:
+
+    Feature Vector
+
+Output: 
+
+    signal_i = [
+        expected return, 
+        probability of price increase, 
+        ranking scores,
+        ...
+    ] => float(0,1) e.g. 0.07
+
+Types of models: Rule-based -> Statistical -> ML models
+
+### 5) Signal Normalization & Ranking - normalize.py
+-Convert raw symbol signals into relative signals:
+
+    z_score_i = (signal_i - mean(signals)) / std(signals)
+
 
     Top 3 Highest = BUY
     Middle n = HOLD 
     Bottom 3 Lowest = SELL
 
-3) Convert Signal -> Position Size
-    -Size our position:
+### 6) Portfolio Construction (NVIDIA QPO-based Optimizer)
+-Size our position by:
 
-    ```bash
-        target_weight = confidence * risk_budget
-    ```
+    A) Allocate capital 
+        -Strong signals -> larger weights
+        -Weak signals -> smaller weights
+    B) Balance risk
+        -Avoid concentration
+        -Control volatility
+    C) Enforce constraints
+        -Max position %
+        -Max leverage
+        -Sector limits
 
-    Example:
-        +5% Portfolio STRONG
-        +0.5% Porfolio WEAK
+Input:
 
-    
-Market Data -> Signal Engine -> Decision Engine -> Portfolio Manager -> Risk Guardrails -> Alpaca 
+    * Signals (ranked)
+    * Risk model
+    * Constraints
+
+Output:
+
+```bash
+target_weights = {
+    AAPL: +5%,
+    NVDA: +8%,
+    MSFT: -3%,
+}
+```
+
+Market Data -> Signal Engine -> Portfolio Manager
