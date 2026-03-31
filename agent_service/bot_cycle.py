@@ -49,6 +49,24 @@ class BotCycleService:
             return "after_hours"
         return "overnight"
 
+    @staticmethod
+    def _build_open_sell_reservations(orders: list[Any]) -> dict[str, float]:
+        reservations: dict[str, float] = {}
+        for order in orders:
+            if str(getattr(order, "side", "")).lower() != "sell":
+                continue
+            qty = float(getattr(order, "qty", 0.0))
+            filled_qty = float(getattr(order, "filled_qty", 0.0) or 0.0)
+            remaining_qty = max(0.0, qty - filled_qty)
+            if remaining_qty <= 0:
+                continue
+            symbol = str(getattr(order, "symbol", ""))
+            if not symbol:
+                continue
+            reservations[symbol] = float(reservations.get(symbol, 0.0)) + remaining_qty
+        return reservations
+
+
     def run_cycle(self, symbols: list[str]) -> dict[str, Any]:
         #Create cycle metadata
         cycle_id = str(uuid4())
@@ -83,6 +101,7 @@ class BotCycleService:
         
         equity = float(account.equity)
         current_positions = {p.symbol: float(p.qty) for p in positions}
+        open_sell_reservations = self._build_open_sell_reservations(orders)
         latest_prices = {symbol: payload["last_price"] for symbol, payload in features.items()}
         
         portfolio_actions, adjusted_target_weights = self._analyze_portfolio_actions(
@@ -117,6 +136,37 @@ class BotCycleService:
         should_use_extended_hours = trade_hour_type != "regular"
         #Risk check every candidate order using guardrails
         for delta in deltas:
+            if delta.side == "sell":
+                available_qty = max(
+                    0.0,
+                    float(current_positions.get(delta.symbol, 0.0))
+                    - float(open_sell_reservations.get(delta.symbol, 0.0)),
+                )
+                if available_qty <= 0.0:
+                    decision_summaries[delta.symbol]["blocked_reason"] = "insufficient_qty_after_open_sell_reservations"
+                    decision_summaries[delta.symbol]["decision_status"] = "BLOCKED"
+                    decision_summaries[delta.symbol]["decision_reason"] = "insufficient_qty_after_open_sell_reservations"
+                    blocked_orders.append(
+                        {
+                            "symbol": delta.symbol,
+                            "reason": "insufficient_qty_after_open_sell_reservations",
+                        }
+                    )
+                    continue
+                if delta.qty > available_qty:
+                    delta.qty = round(available_qty, 4)
+                    if delta.qty <= 0.0:
+                        decision_summaries[delta.symbol]["blocked_reason"] = "insufficient_qty_after_open_sell_reservations"
+                        decision_summaries[delta.symbol]["decision_status"] = "BLOCKED"
+                        decision_summaries[delta.symbol]["decision_reason"] = "insufficient_qty_after_open_sell_reservations"
+                        blocked_orders.append(
+                            {
+                                "symbol": delta.symbol,
+                                "reason": "insufficient_qty_after_open_sell_reservations",
+                            }
+                        )
+                        continue
+
             decision_summaries[delta.symbol]["candidate_order_side"] = delta.side
             decision_summaries[delta.symbol]["candidate_order_qty"] = delta.qty
             decision_summaries[delta.symbol]["decision_status"] = "CANDIDATE_ORDER"
@@ -169,6 +219,8 @@ class BotCycleService:
                     "trade_hour_type": trade_hour_type,
                 }
             )
+            if delta.side == "sell":
+                open_sell_reservations[delta.symbol] = float(open_sell_reservations.get(delta.symbol, 0.0)) + float(delta.qty)
         for summary in decision_summaries.values():
             print_symbol_summary(summary)
 
