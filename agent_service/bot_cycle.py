@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from agent_service.optimizer_qpo import OptimizerQPO
 from agent_service.decision_policy import DecisionPolicy
+from agent_service.exit_policy import ExitPolicy
 from backend.core.settings import get_settings
 from db.repositories.snapshots import create_bot_cycle_snapshot
 from db.models.snapshots import BotCycleSnapshot
@@ -33,6 +34,7 @@ class BotCycleService:
     execution_router: ExecutionRouter
     db_session: Any
     decision_policy: DecisionPolicy = field(default_factory=DecisionPolicy)
+    exit_policy: ExitPolicy = field(default_factory=ExitPolicy)
     benchmark_symbol: str = "SPY"
 
     @staticmethod
@@ -79,6 +81,7 @@ class BotCycleService:
         positions = self.alpaca_client.get_positions()
         orders = self.alpaca_client.get_orders(status="open", limit=200)
         symbols = sorted({*symbols, *[p.symbol for p in positions if float(p.qty) != 0.0]})
+        previous_payload = self._latest_snapshot_payload()
 
         #pull features per symbol via 30 1-minute bars, latest quote, and news sentiment (if available)
         features, decision_summaries = self._pull_features(symbols)
@@ -118,6 +121,15 @@ class BotCycleService:
         approved_signals = policy_result["approved_candidates"]
         policy_decisions = policy_result["decisions"]
 
+        exit_policy_result = self.exit_policy.evaluate_positions(
+            positions=positions,
+            latest_prices=latest_prices,
+            signals=signals,
+            previous_payload=previous_payload,
+            now_utc=started_at,
+        )
+        exit_policy_actions = exit_policy_result["actions"]
+
         for symbol, policy_decision in policy_decisions.items():
             decision_summaries[symbol]["policy_action"] = policy_decision["policy_action"]
             decision_summaries[symbol]["policy_reason"] = policy_decision["policy_reason"]
@@ -126,8 +138,46 @@ class BotCycleService:
                 decision_summaries[symbol]["decision_status"] = "NO_TRADE"
                 decision_summaries[symbol]["decision_reason"] = policy_decision["policy_reason"]
 
+        for symbol, position_action in exit_policy_actions.items():
+            action = str(position_action.get("action", "HOLD")).upper()
+            trigger = str(position_action.get("trigger", "none"))
+            decision_summaries.setdefault(symbol, {"symbol": symbol})
+            decision_summaries[symbol]["position_action"] = action
+            decision_summaries[symbol]["position_action_trigger"] = trigger
+            decision_summaries[symbol]["position_action_trigger_type"] = position_action.get("trigger_type", "none")
+            if action == "EXIT":
+                approved_signals[symbol] = {
+                    "direction": "flat",
+                    "strength": 0.0,
+                    "confidence": 1.0,
+                    "expected_horizon": "immediate",
+                }
+                decision_summaries[symbol]["decision_status"] = "EXIT_POLICY_TRIGGERED"
+                decision_summaries[symbol]["decision_reason"] = f"exit_policy:{trigger}"
+            elif action == "REDUCE":
+                if symbol in approved_signals and isinstance(approved_signals[symbol], dict):
+                    approved_signals[symbol]["strength"] = max(
+                        0.0, float(approved_signals[symbol].get("strength", 0.0)) * 0.5
+                    )
+                decision_summaries[symbol]["decision_status"] = "EXIT_POLICY_TRIGGERED"
+                decision_summaries[symbol]["decision_reason"] = f"exit_policy:{trigger}"
+            elif action == "ADD":
+                if symbol in approved_signals and isinstance(approved_signals[symbol], dict):
+                    approved_signals[symbol]["strength"] = float(approved_signals[symbol].get("strength", 0.0)) * 1.25
+                decision_summaries[symbol]["decision_status"] = "EXIT_POLICY_TRIGGERED"
+                decision_summaries[symbol]["decision_reason"] = f"exit_policy:{trigger}"
+
         #Optimize to target weights with OptimizerQPO for policy-approved candidates, using SPY as benchmark for risk calculations
         target_weights = self.optimizer.optimize_target_weights(approved_signals, benchmark_symbol=self.benchmark_symbol)
+
+        for symbol, position_action in exit_policy_actions.items():
+            action = str(position_action.get("action", "HOLD")).upper()
+            if action == "EXIT":
+                target_weights[symbol] = 0.0
+            elif action == "REDUCE":
+                target_weights[symbol] = float(target_weights.get(symbol, 0.0)) * 0.5
+            elif action == "ADD":
+                target_weights[symbol] = min(1.0, float(target_weights.get(symbol, 0.0)) * 1.25)
 
         for symbol in decision_summaries:
             weight = float(target_weights.get(symbol, 0.0))
@@ -144,6 +194,7 @@ class BotCycleService:
             base_target_weights=target_weights,
             features=features,
             equity=equity,
+            previous_payload=previous_payload,
         )
 
 
@@ -280,6 +331,8 @@ class BotCycleService:
             "features": features,
             "signals": signals,
             "policy_decisions": policy_decisions,
+            "exit_policy_actions": exit_policy_actions,
+            "exit_policy_state": exit_policy_result["state"],
             "target_weights": target_weights,
             "adjusted_target_weights": adjusted_target_weights,
             "portfolio_actions": portfolio_actions,
@@ -424,8 +477,8 @@ class BotCycleService:
         base_target_weights: dict[str, float],
         features: dict[str, dict[str, float]],
         equity: float,
+        previous_payload: dict[str, Any],
     ) -> tuple[dict[str, dict[str, Any]], dict[str, float]]:
-        previous_payload = self._latest_snapshot_payload()
         previous_features: dict[str, dict[str, float]] = previous_payload.get("features", {})
 
         actions: dict[str, dict[str, Any]] = {}
