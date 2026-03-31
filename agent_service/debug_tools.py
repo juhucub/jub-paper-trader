@@ -58,6 +58,9 @@ def summarize_symbol_decision(symbol: str, bars: list[dict], quote: dict) -> dic
         "decision_status": "NO_FEATURE_DECISION_YET",
         "decision_reason": None,
         "blocked_reason": None,
+        "policy_action": None,
+        "policy_reason": None,
+        "portfolio_constraints_triggered": [],
     }
 
 def print_symbol_summary(summary: dict) -> None:
@@ -66,16 +69,20 @@ def print_symbol_summary(summary: dict) -> None:
     signal = summary.get("signal")
 
     if isinstance(signal, dict):
-        signal_value = signal.get("score") or signal.get("value") or signal.get("signal")
+        signal_display = (
+            f"action={signal.get('action')} "
+            f"score={_fmt_float(signal.get('score'), 6)} "
+            f"confidence={_fmt_float(signal.get('confidence'), 3)}"
+        )
     else:
-        signal_value = signal
+        signal_display = _fmt_float(signal, 6) if signal is not None else "n/a"
 
-    signal_display = _fmt_float(signal_value, 6) if signal_value is not None else "n/a"
     target_weight = summary.get("target_weight")
     target_weight_display = _fmt_float(target_weight, 4) if target_weight is not None else "n/a"
 
     blocked_by = summary.get("blocked_reason")
     decision_reason = summary.get("decision_reason")
+    policy_constraints = summary.get("portfolio_constraints_triggered") or []
     print("\n=== BOT DECISION SUMMARY ===")
     print(f"Symbol:       {summary['symbol']}")
     print(f"Bars:         {summary['bar_count']}")
@@ -95,4 +102,7 @@ def print_symbol_summary(summary: dict) -> None:
     print(f"Order qty:    {_fmt_float(summary['candidate_order_qty'], 4)}")
     print(f"Status:       {_fmt_optional(summary['decision_status'])}")
     print(f"Reason:       {_normalize_reason(decision_reason)}")
+    print(f"Policy:       {_fmt_optional(summary.get('policy_action'))}")
+    print(f"Policy why:   {_normalize_reason(summary.get('policy_reason'))}")
+    print(f"Constraints:  {', '.join(policy_constraints) if policy_constraints else 'none'}")
     print(f"Blocked by:   {_normalize_reason(blocked_by)}")
