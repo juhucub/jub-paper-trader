@@ -70,7 +70,6 @@ class BotCycleService:
             reservations[symbol] = float(reservations.get(symbol, 0.0)) + remaining_qty
         return reservations
 
-
     def run_cycle(self, symbols: list[str]) -> dict[str, Any]:
         #Create cycle metadata
         cycle_id = str(uuid4())
@@ -460,7 +459,6 @@ class BotCycleService:
         if hasattr(self.alpaca_data_client, "get_news_sentiment"):
             return float(self.alpaca_data_client.get_news_sentiment(symbol))
         return 0.0
-
 
     def _latest_snapshot_payload(self) -> dict[str, Any]:
         row = self.db_session.execute(

@@ -40,6 +40,50 @@ python -m scheduler.runner --symbols AAPL,MSFT,NVDA --interval-seconds 60
 uvicorn backend.map:app --reload
 ```
 
-# 5) Visualization Code Flow
+# 5) Visualization Code Flow GOAL
 
+1) Market Data - alpaca_data.py
+    -Instantiate Symbol With Raw Market Data
+
+    Inputs:
+1) Market Data - alpaca_data.py
+    -Analyze each independent symbol
+
+    ```bash
+        signal_i = f(features_i)
+    ```
+
+    ```bash
+        features_i = [
+            momentum_i,
+            mean_reversion_i,
+            volatility_i,
+            liquidity_i,
+            ...
+        ]
+    ```
+
+2) Signal Engine - 
+    -Normalize across all stocks by ranking:
+
+    ```bash
+        z_score_i = (signal_i - mean(signals)) / std(signals)
+    ```
+
+    Top 3 Highest = BUY
+    Middle n = HOLD 
+    Bottom 3 Lowest = SELL
+
+3) Convert Signal -> Position Size
+    -Size our position:
+
+    ```bash
+        target_weight = confidence * risk_budget
+    ```
+
+    Example:
+        +5% Portfolio STRONG
+        +0.5% Porfolio WEAK
+
+    
 Market Data -> Signal Engine -> Decision Engine -> Portfolio Manager -> Risk Guardrails -> Alpaca 

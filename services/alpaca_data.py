@@ -23,6 +23,11 @@ c - conditions
 t - timestamp
 z - tape (venue code)
 """
+
+"""
+For each stock i:
+    signal_i = f(features_i)
+"""
 @dataclass(slots=True)
 class AlpacaDataClient:
     api_key: str
