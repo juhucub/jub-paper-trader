@@ -10,6 +10,7 @@ from uuid import uuid4
 import logging 
 from zoneinfo import ZoneInfo
 from sqlalchemy import select
+from agent_service.feature_vector import FeatureVector
 
 from agent_service.optimizer_qpo import OptimizerQPO
 from agent_service.decision_policy import DecisionPolicy
@@ -394,18 +395,10 @@ class BotCycleService:
 
             summary = summarize_symbol_decision(symbol, bars, quote)
             decision_summaries[symbol] = summary
-            #news_score = self._get_news_score(symbol)
 
-           
-    
-
-            #Compute feature values
             closes = [float(bar.get("c", 0.0)) for bar in bars if bar.get("c") is not None]
-            last_price = float(quote.get("ap") or quote.get("bp") or (closes[-1] if closes else 0.0))
-            momentum = self._momentum_score(closes)
-            mean_reversion = self._mean_reversion_score(closes)
-            avg_dollar_volume = mean([float(bar.get("v", 0.0)) * float(bar.get("c", 0.0)) for bar in bars]) if bars else 0.0
-            
+            sentiment_score = self._get_news_score(symbol)
+
             if not bars:
                 summary["decision_status"] = "NO_TRADE"
                 summary["decision_reason"] = "no_bars_returned"
@@ -418,41 +411,20 @@ class BotCycleService:
                 decision_summaries[symbol] = summary
                 continue
 
-            if last_price <= 0:
+            feature_row = FeatureVector.build(
+                bars=bars,
+                quote=quote,
+                sentiment_score=sentiment_score,
+            )
+            if feature_row["last_price"] <= 0:
                 summary["decision_status"] = "NO_TRADE"
                 summary["decision_reason"] = "missing_or_non_positive_prices"
                 decision_summaries[symbol] = summary
                 continue
-            features[symbol] = {
-                "last_price": last_price,
-                "momentum": momentum,
-                "mean_reversion": mean_reversion,
-                #"news": news_score,
-                "avg_dollar_volume": avg_dollar_volume,
-            }
+            
+            features[symbol] = feature_row
+
         return features, decision_summaries
-
-    @staticmethod
-    def _momentum_score(closes: list[float]) -> float:
-        #momentum = (last_close - first_close) / first_close over the 30-minute window
-        if len(closes) < 2:
-            return 0.0
-        start = closes[0]
-        end = closes[-1]
-        if start <= 0:
-            return 0.0
-        return (end - start) / start
-
-    @staticmethod
-    def _mean_reversion_score(closes: list[float]) -> float:
-        #mean reversion = (avg(last 10 closes) - last_close) / avg(last 10 closes)
-        if len(closes) < 10:
-            return 0.0
-        window = closes[-10:]
-        baseline = mean(window)
-        if baseline <= 0:
-            return 0.0
-        return (baseline - closes[-1]) / baseline
 
     def _get_news_score(self, symbol: str) -> float:
         #news sentiment score between -1 and 1, where -1 is very negative, 0 is neutral, and 1 is very positive
