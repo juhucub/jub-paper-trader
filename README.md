@@ -39,3 +39,7 @@ python -m scheduler.runner --symbols AAPL,MSFT,NVDA --interval-seconds 60
 ```bash
 uvicorn backend.map:app --reload
 ```
+
+# 5) Visualization Code Flow
+
+Market Data -> Signal Engine -> Decision Engine -> Portfolio Manager -> Risk Guardrails -> Alpaca 

@@ -27,6 +27,8 @@ class AlpacaPosition:
     symbol: str
     qty: float
     side: str
+    avg_entry_price: float | None
+    current_price: float | None
     market_value: float | None
     unrealized_pl: float | None
 
@@ -39,6 +41,8 @@ class AlpacaOrder:
     type: str
     time_in_force: str
     status: str
+    filled_qty: float = 0.0
+    filled_avg_price: float | None = None
 
 @dataclass(slots=True)
 class BuyingPowerEquity:
@@ -84,6 +88,8 @@ class AlpacaClient:
                 symbol=item["symbol"],
                 qty=_to_float(item.get("qty"), field_name="qty"),
                 side=item.get("side", "long"),
+                avg_entry_price=_to_optional_float(item.get("avg_entry_price")),
+                current_price=_to_optional_float(item.get("current_price")),
                 market_value=_to_optional_float(item.get("market_value")),
                 unrealized_pl=_to_optional_float(item.get("unrealized_pl")),
             )
@@ -111,6 +117,8 @@ class AlpacaClient:
                 type=item["type"],
                 time_in_force=item["time_in_force"],
                 status=item.get("status", "unknown"),
+                filled_qty=_to_optional_float(item.get("filled_qty")) or 0.0,
+                filled_avg_price=_to_optional_float(item.get("filled_avg_price")),
             )
             for item in payload
         ]
@@ -123,6 +131,7 @@ class AlpacaClient:
         side: str,
         type: str,
         time_in_force: str,
+        trade_hour_type: str | None = None,
         limit_price: float | None = None,
         stop_price: float | None = None,
         client_order_id: str | None = None,
@@ -144,6 +153,10 @@ class AlpacaClient:
             body["client_order_id"] = client_order_id
         if order_class is not None:
             body["order_class"] = order_class
+        if trade_hour_type is not None:
+            # keep trade-hour context available at the caller boundary without sending
+            # unsupported fields to Alpaca's order endpoint.
+            _ = trade_hour_type
         body.update(extra_fields)
 
         payload = self._request_json("POST", "/v2/orders", json_body=body)
@@ -155,6 +168,8 @@ class AlpacaClient:
             type=payload["type"],
             time_in_force=payload["time_in_force"],
             status=payload.get("status", "unknown"),
+            filled_qty=_to_optional_float(payload.get("filled_qty")) or 0.0,
+            filled_avg_price=_to_optional_float(payload.get("filled_avg_price")),
         )
 
     def cancel_order(self, order_id: str) -> None:
@@ -170,6 +185,9 @@ class AlpacaClient:
             type=payload["type"],
             time_in_force=payload["time_in_force"],
             status=payload.get("status", "unknown"),
+            filled_qty=_to_optional_float(payload.get("filled_qty")) or 0.0,
+            filled_avg_price=_to_optional_float(payload.get("filled_avg_price")),
+            
         )
 
     def get_buying_power_and_equity(self) -> BuyingPowerEquity:
@@ -236,7 +254,6 @@ def _to_float(value: Any, field_name: str) -> float:
     if value is None:
         raise ValueError(f"Missing required numeric field: {field_name}")
     return float(value)
-
 
 def _to_optional_float(value: Any) -> float | None:
     if value is None:

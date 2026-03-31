@@ -77,6 +77,52 @@ class PortfolioEngine:
         state.max_drawdown = max(state.max_drawdown, state.current_drawdown)
         state.updated_at = datetime.now(timezone.utc)
 
+         #Upsert orders first so we can track incremental fills (including partial fills) safely.
+        for item in orders:
+            broker_id = item.get("id")
+            existing = None
+
+            if broker_id:
+                existing = self.db_session.execute(
+                    select(Order).where(Order.broker_owner_id == broker_id)
+                ).scalar_one_or_none()
+
+            order = existing or Order(
+                broker_owner_id=broker_id,
+                symbol=str(item["symbol"]).upper(),
+                side=str(item.get("side", "buy")).lower(),
+                quantity=float(item.get("qty", item.get("quantity", 0))),
+            )
+
+            prev_filled_qty = float(order.filled_quantity or 0.0)
+            order.status = str(item.get("status", order.status))
+            order.quantity = float(item.get("qty", item.get("quantity", order.quantity)))
+
+            filled_qty_raw = item.get("filled_qty", item.get("filled_quantity"))
+            if filled_qty_raw is None:
+                new_filled_qty = prev_filled_qty
+            else:
+                new_filled_qty = float(filled_qty_raw)
+            fill_delta = max(new_filled_qty - prev_filled_qty, 0.0)
+
+            filled_avg_raw = item.get("filled_avg_price")
+            filled_avg_price = float(filled_avg_raw) if filled_avg_raw not in (None, "") else order.filled_avg_price
+
+            order.filled_quantity = new_filled_qty
+            order.filled_avg_price = filled_avg_price
+            order.updated_at = datetime.now(timezone.utc)
+
+            if not existing:
+                self.db_session.add(order)
+
+            if fill_delta > 0 and filled_avg_price is not None:
+                self._record_fill_event(
+                    symbol=order.symbol,
+                    side=order.side,
+                    qty=fill_delta,
+                    price=float(filled_avg_price),
+                )
+
         #Upsert positions based on broker snapshot in local
         for item in positions:
             symbol = str(item["symbol"]).upper() #Normalize
@@ -106,39 +152,7 @@ class PortfolioEngine:
             position.closed_at = datetime.now(timezone.utc) if qty == 0 else None
             position.updated_at = datetime.now(timezone.utc)
 
-        #Upsert orders based on broker snapshot in local
-        for item in orders:
-            broker_id = item.get("id")
-            existing = None
-
-            if broker_id:
-                existing = self.db_session.execute(
-                    select(Order).where(Order.broker_owner_id == broker_id)
-                ).scalar_one_or_none()
-
-            #if order DNE locally, create it
-            order = existing or Order(
-                broker_owner_id=broker_id,
-                symbol=str(item["symbol"]).upper(),
-                side=str(item.get("side", "buy")).lower(),
-                quantity=float(item.get("qty", item.get("quantity", 0))),
-            )
-            order.status = str(item.get("status", order.status))
-            filled_qty = (
-                item.get("filled_qty")
-                or item.get("filled_quantity")
-                or order.filled_quantity
-                or 0.0
-            )
-            order.filled_quantity = float(filled_qty)
-            
-            filled_avg = item.get("filled_avg_price")
-            order.filled_avg_price = float(filled_avg) if filled_avg is not None else order.filled_avg_price
-            order.updated_at = datetime.now(timezone.utc)
-
-            if not existing:
-                self.db_session.add(order)
-
+       
         #Recompute derived analytics after syncing state
         self.recalculate_equity()
         exposure = self.compute_exposure()
@@ -147,6 +161,19 @@ class PortfolioEngine:
         self.db_session.commit()
         return exposure
     
+    def _record_fill_event(self, symbol: str, side: str, qty: float, price: float) -> None:
+        if qty <= 0 or price <= 0:
+            return
+        trade = TradeHistory(
+            symbol=symbol,
+            side=side,
+            quantity=qty,
+            price=price,
+            realized_pnl=0.0,
+            order_id=None,
+        )
+        self.db_session.add(trade)
+        
     def apply_fill(self, fill_event: dict[str, Any]) -> dict[str, float]:
         """
         Apply a single execution / fill event to local portfolio state

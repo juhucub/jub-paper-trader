@@ -8,10 +8,13 @@ from statistics import mean
 from typing import Any
 from uuid import uuid4
 import logging 
+from zoneinfo import ZoneInfo
+from sqlalchemy import select
 
 from agent_service.optimizer_qpo import OptimizerQPO
 from backend.core.settings import get_settings
 from db.repositories.snapshots import create_bot_cycle_snapshot
+from db.models.snapshots import BotCycleSnapshot
 from services.execution_router import ExecutionRouter
 from agent_service.debug_tools import summarize_symbol_decision, print_symbol_summary
 
@@ -30,10 +33,32 @@ class BotCycleService:
     db_session: Any
     benchmark_symbol: str = "SPY"
 
+    @staticmethod
+    def _get_trade_hour_type(now_utc: datetime | None = None) -> str:
+        current_utc = now_utc or datetime.now(timezone.utc)
+        now_et = current_utc.astimezone(ZoneInfo("America/New_York"))
+        minutes_since_midnight = now_et.hour * 60 + now_et.minute
+
+        if now_et.weekday() >= 5:
+            return "overnight"
+        if 4 * 60 <= minutes_since_midnight < (9 * 60 + 30):
+            return "pre_market"
+        if (9 * 60 + 30) <= minutes_since_midnight < 16 * 60:
+            return "regular"
+        if 16 * 60 <= minutes_since_midnight < 20 * 60:
+            return "after_hours"
+        return "overnight"
+
     def run_cycle(self, symbols: list[str]) -> dict[str, Any]:
         #Create cycle metadata
         cycle_id = str(uuid4())
         started_at = datetime.now(timezone.utc)
+
+        #Load live broker context from Alpaca and include currently held symbols in feature generation.
+        account = self.alpaca_client.get_account()
+        positions = self.alpaca_client.get_positions()
+        orders = self.alpaca_client.get_orders(status="open", limit=200)
+        symbols = sorted({*symbols, *[p.symbol for p in positions if float(p.qty) != 0.0]})
 
         #pull features per symbol via 30 1-minute bars, latest quote, and news sentiment (if available)
         features, decision_summaries = self._pull_features(symbols)
@@ -55,39 +80,30 @@ class BotCycleService:
             if symbol in signals and weight <= 0.0:
                 decision_summaries[symbol]["decision_status"] = "NO_TRADE"
                 decision_summaries[symbol]["decision_reason"] = "no_target_allocation"
-        #Load live broker context from Alpaca 
-        account = self.alpaca_client.get_account()
-        positions = self.alpaca_client.get_positions()
-        orders = self.alpaca_client.get_orders(status="open", limit=200)
+        
         equity = float(account.equity)
         current_positions = {p.symbol: float(p.qty) for p in positions}
         latest_prices = {symbol: payload["last_price"] for symbol, payload in features.items()}
         
+        portfolio_actions, adjusted_target_weights = self._analyze_portfolio_actions(
+            current_positions=current_positions,
+            latest_prices=latest_prices,
+            base_target_weights=target_weights,
+            features=features,
+            equity=equity,
+        )
+
         #Compute rebalance deltas via ExecutionRouter
-        deltas = self.execution_router.to_rebalance_deltas(target_weights, current_positions, latest_prices, equity)
+        deltas = self.execution_router.to_rebalance_deltas(adjusted_target_weights, current_positions, latest_prices, equity)
         no_delta_reason = self._derive_no_delta_reason(
             symbols=symbols,
             signals=signals,
-            target_weights=target_weights,
+            target_weights=adjusted_target_weights,
             latest_prices=latest_prices,
             deltas=deltas,
             equity=equity,
         )
 
-        #High level logger for debugging delta mishaps
-        """
-        if settings.debug_bot_cycle:
-            logger.info(
-                "BOT_CYCLE_DEBUG cycle_id=%s generated_signals=%s target_weights=%s candidate_orders=%s "
-                "blocked_orders_preview=%s reason=%s",
-                cycle_id,
-                signals,
-                target_weights,
-                [asdict(delta) for delta in deltas],
-                [],
-                no_delta_reason,
-            )
-        """
 
         #Potential candidates to order, subject to risk guardrails
         submitted_orders: list[dict[str, Any]] = []
@@ -97,6 +113,8 @@ class BotCycleService:
             "daily_realized_pnl": 0.0,
             "open_positions": len([p for p in positions if float(p.qty) != 0]),
         }
+        trade_hour_type = self._get_trade_hour_type(started_at)
+        should_use_extended_hours = trade_hour_type != "regular"
         #Risk check every candidate order using guardrails
         for delta in deltas:
             decision_summaries[delta.symbol]["candidate_order_side"] = delta.side
@@ -125,18 +143,32 @@ class BotCycleService:
                 continue
             
             #Submit allowed market day orders to Alpaca
-            order = self.alpaca_client.submit_order(
-                symbol=delta.symbol,
-                qty=delta.qty,
-                side=delta.side,
-                type="market",
-                time_in_force="day",
-                client_order_id=f"cycle-{cycle_id}-{delta.symbol}",
-            )
+            order_type = "limit" if should_use_extended_hours else "market"
+            order_request: dict[str, Any] = {
+                "symbol": delta.symbol,
+                "qty": delta.qty,
+                "side": delta.side,
+                "type": order_type,
+                "time_in_force": "day",
+                "client_order_id": f"cycle-{cycle_id}-{delta.symbol}",
+                "trade_hour_type": trade_hour_type,
+            }
+            if should_use_extended_hours:
+                order_request["limit_price"] = delta.reference_price
+                order_request["extended_hours"] = True
+
+            order = self.alpaca_client.submit_order(**order_request)
             decision_summaries[delta.symbol]["decision_status"] = "SUBMITTED"
             decision_summaries[delta.symbol]["decision_reason"] = "order_submitted"
-            submitted_orders.append({"id": order.id, "symbol": order.symbol, "side": order.side, "qty": order.qty})
-        
+            submitted_orders.append(
+                {
+                    "id": order.id,
+                    "symbol": order.symbol,
+                    "side": order.side,
+                    "qty": order.qty,
+                    "trade_hour_type": trade_hour_type,
+                }
+            )
         for summary in decision_summaries.values():
             print_symbol_summary(summary)
 
@@ -161,6 +193,8 @@ class BotCycleService:
             "features": features,
             "signals": signals,
             "target_weights": target_weights,
+            "adjusted_target_weights": adjusted_target_weights,
+            "portfolio_actions": portfolio_actions,
             "submitted_orders": submitted_orders,
             "blocked_orders": blocked_orders,
             "reconciliation": reconciliation,
@@ -278,6 +312,69 @@ class BotCycleService:
         if hasattr(self.alpaca_data_client, "get_news_sentiment"):
             return float(self.alpaca_data_client.get_news_sentiment(symbol))
         return 0.0
+
+
+    def _latest_snapshot_payload(self) -> dict[str, Any]:
+        row = self.db_session.execute(
+            select(BotCycleSnapshot).order_by(BotCycleSnapshot.created_at.desc()).limit(1)
+        ).scalar_one_or_none()
+        if not row:
+            return {}
+        return dict(row.payload or {})
+
+    def _analyze_portfolio_actions(
+        self,
+        current_positions: dict[str, float],
+        latest_prices: dict[str, float],
+        base_target_weights: dict[str, float],
+        features: dict[str, dict[str, float]],
+        equity: float,
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, float]]:
+        previous_payload = self._latest_snapshot_payload()
+        previous_features: dict[str, dict[str, float]] = previous_payload.get("features", {})
+
+        actions: dict[str, dict[str, Any]] = {}
+        adjusted = dict(base_target_weights)
+        if equity <= 0:
+            return actions, adjusted
+
+        for symbol, qty in current_positions.items():
+            if qty <= 0:
+                continue
+            price = float(latest_prices.get(symbol, 0.0))
+            if price <= 0:
+                continue
+            current_weight = (qty * price) / equity
+            base_target = float(adjusted.get(symbol, 0.0))
+            feature_row = features.get(symbol, {})
+            current_score = (0.5 * feature_row.get("momentum", 0.0)) + (0.5 * feature_row.get("mean_reversion", 0.0))
+            prev_row = previous_features.get(symbol, {})
+            previous_score = (0.5 * float(prev_row.get("momentum", 0.0))) + (0.5 * float(prev_row.get("mean_reversion", 0.0)))
+
+            action = "hold"
+            reason = "position_healthy"
+            adjusted_target = base_target
+
+            if current_score < -0.01 or (previous_score > 0 and current_score <= 0):
+                action = "close"
+                reason = "score_deterioration_vs_previous_snapshot"
+                adjusted_target = 0.0
+            elif current_score < 0.005 and current_weight > 0:
+                action = "reduce"
+                reason = "weak_signal_keep_half_exposure"
+                adjusted_target = min(base_target, current_weight * 0.5)
+
+            adjusted[symbol] = adjusted_target
+            actions[symbol] = {
+                "action": action,
+                "reason": reason,
+                "current_weight": current_weight,
+                "base_target_weight": base_target,
+                "adjusted_target_weight": adjusted_target,
+                "current_score": current_score,
+                "previous_score": previous_score,
+            }
+        return actions, adjusted
 
     def _generate_signals(self, features: dict[str, dict[str, float]]) -> dict[str, float]:
         scored: dict[str, float] = {}
