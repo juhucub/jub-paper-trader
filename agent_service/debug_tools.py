@@ -1,11 +1,12 @@
 from statistics import mean
 from typing import Any
 
-def _fmt_float(value: Any, decimals: int = 2) -> str:
+def _fmt_float(value, decimals=2):
     if value is None:
         return "n/a"
+    if isinstance(value, dict):
+        return str(value)
     return f"{float(value):,.{decimals}f}"
-
 
 def _fmt_optional(value: Any) -> str:
     return "n/a" if value is None else str(value)
@@ -63,7 +64,13 @@ def print_symbol_summary(summary: dict) -> None:
     spread_pct = summary.get("spread_pct")
     spread_pct_display = f"{_fmt_float(spread_pct, 3)}%" if spread_pct is not None else "n/a"
     signal = summary.get("signal")
-    signal_display = _fmt_float(signal, 6) if signal is not None else "n/a"
+
+    if isinstance(signal, dict):
+        signal_value = signal.get("score") or signal.get("value") or signal.get("signal")
+    else:
+        signal_value = signal
+
+    signal_display = _fmt_float(signal_value, 6) if signal_value is not None else "n/a"
     target_weight = summary.get("target_weight")
     target_weight_display = _fmt_float(target_weight, 4) if target_weight is not None else "n/a"
 

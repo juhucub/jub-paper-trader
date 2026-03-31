@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from statistics import mean
 from typing import Any
@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 
 from agent_service.optimizer_qpo import OptimizerQPO
+from agent_service.decision_policy import DecisionPolicy
 from backend.core.settings import get_settings
 from db.repositories.snapshots import create_bot_cycle_snapshot
 from db.models.snapshots import BotCycleSnapshot
@@ -31,6 +32,7 @@ class BotCycleService:
     optimizer: OptimizerQPO
     execution_router: ExecutionRouter
     db_session: Any
+    decision_policy: DecisionPolicy = field(default_factory=DecisionPolicy)
     benchmark_symbol: str = "SPY"
 
     @staticmethod
@@ -89,8 +91,43 @@ class BotCycleService:
             decision_summaries[symbol]["decision_status"] = "SIGNAL_GENERATED"
             decision_summaries[symbol]["decision_reason"] = "signal_generated"
 
-        #Optimize to target weights with OptimizerQPO, using SPY as the benchmark for risk calculations
-        target_weights = self.optimizer.optimize_target_weights(signals, benchmark_symbol=self.benchmark_symbol)
+        equity = float(account.equity)
+        cash = float(account.buying_power)
+        current_positions = {p.symbol: float(p.qty) for p in positions}
+        latest_prices = {symbol: payload["last_price"] for symbol, payload in features.items()}
+        
+        concentration = {
+            symbol: ((qty * latest_prices.get(symbol, 0.0)) / equity) if equity > 0 else 0.0
+            for symbol, qty in current_positions.items()
+        }
+
+        market_context = {
+            "volatility": self._estimate_market_volatility(features),
+            "liquidity": {symbol: payload.get("avg_dollar_volume", 0.0) for symbol, payload in features.items()},
+        }
+        policy_result = self.decision_policy.evaluate(
+            signals=signals,
+            portfolio_state={
+                "positions": current_positions,
+                "cash": cash,
+                "equity": equity,
+                "concentration": concentration,
+            },
+            market_context=market_context,
+        )
+        approved_signals = policy_result["approved_candidates"]
+        policy_decisions = policy_result["decisions"]
+
+        for symbol, policy_decision in policy_decisions.items():
+            decision_summaries[symbol]["policy_action"] = policy_decision["policy_action"]
+            decision_summaries[symbol]["policy_reason"] = policy_decision["policy_reason"]
+            decision_summaries[symbol]["portfolio_constraints_triggered"] = policy_decision["portfolio_constraints_triggered"]
+            if policy_decision["policy_action"] == "skip":
+                decision_summaries[symbol]["decision_status"] = "NO_TRADE"
+                decision_summaries[symbol]["decision_reason"] = policy_decision["policy_reason"]
+
+        #Optimize to target weights with OptimizerQPO for policy-approved candidates, using SPY as benchmark for risk calculations
+        target_weights = self.optimizer.optimize_target_weights(approved_signals, benchmark_symbol=self.benchmark_symbol)
 
         for symbol in decision_summaries:
             weight = float(target_weights.get(symbol, 0.0))
@@ -99,11 +136,8 @@ class BotCycleService:
                 decision_summaries[symbol]["decision_status"] = "NO_TRADE"
                 decision_summaries[symbol]["decision_reason"] = "no_target_allocation"
         
-        equity = float(account.equity)
-        current_positions = {p.symbol: float(p.qty) for p in positions}
         open_sell_reservations = self._build_open_sell_reservations(orders)
-        latest_prices = {symbol: payload["last_price"] for symbol, payload in features.items()}
-        
+
         portfolio_actions, adjusted_target_weights = self._analyze_portfolio_actions(
             current_positions=current_positions,
             latest_prices=latest_prices,
@@ -111,6 +145,7 @@ class BotCycleService:
             features=features,
             equity=equity,
         )
+
 
         #Compute rebalance deltas via ExecutionRouter
         deltas = self.execution_router.to_rebalance_deltas(adjusted_target_weights, current_positions, latest_prices, equity)
@@ -244,6 +279,7 @@ class BotCycleService:
             "benchmark_symbol": self.benchmark_symbol,
             "features": features,
             "signals": signals,
+            "policy_decisions": policy_decisions,
             "target_weights": target_weights,
             "adjusted_target_weights": adjusted_target_weights,
             "portfolio_actions": portfolio_actions,
@@ -261,7 +297,7 @@ class BotCycleService:
     def _derive_no_delta_reason(
         self,
         symbols: list[str],
-        signals: dict[str, float],
+        signals: dict[str, dict[str, float | str]],
         target_weights: dict[str, float],
         latest_prices: dict[str, float],
         deltas: list[Any],
@@ -272,7 +308,7 @@ class BotCycleService:
         if not symbols:
             return "NO_DELTAS:no_symbols"
         if not deltas:
-            if signals and all(value <= 0.0 for value in signals.values()):
+            if signals and all(float(value.get("score", 0.0)) <= 0.0 for value in signals.values()):
                 return "NO_DELTAS:all_signals_non_positive"
             if all(float(latest_prices.get(symbol, 0.0)) <= 0.0 for symbol in symbols):
                 return "NO_DELTAS:missing_or_non_positive_prices"
@@ -280,6 +316,13 @@ class BotCycleService:
                 return "NO_DELTAS:no_target_allocation"
             return "NO_DELTAS:no_rebalance_deltas"
         return "HAS_DELTAS"
+
+    @staticmethod
+    def _estimate_market_volatility(features: dict[str, dict[str, float]]) -> float:
+        if not features:
+            return 0.0
+        realized = [abs(float(values.get("momentum", 0.0))) for values in features.values()]
+        return mean(realized) if realized else 0.0
 
     def _pull_features(self, symbols: list[str]) -> dict[str, dict[str, float]]:
         features: dict[str, dict[str, float]] = {}
@@ -428,10 +471,21 @@ class BotCycleService:
             }
         return actions, adjusted
 
-    def _generate_signals(self, features: dict[str, dict[str, float]]) -> dict[str, float]:
-        scored: dict[str, float] = {}
+    def _generate_signals(self, features: dict[str, dict[str, float]]) -> dict[str, dict[str, float | str]]:
+        scored: dict[str, dict[str, float | str]] = {}
         for symbol, values in features.items():
             #0.5*momentum + 0.5*mean_reversion, clipped to a minimum of 0.0 to avoid negative signals
             weighted = (0.5 * values["momentum"]) + (0.5 * values["mean_reversion"])
-            scored[symbol] = max(weighted, 0.0)
+            if weighted > 0.0:
+                action = "buy"
+            elif weighted < 0.0:
+                action = "sell"
+            else:
+                action = "hold"
+            confidence = min(1.0, abs(weighted) * 10)
+            scored[symbol] = {
+                "score": weighted,
+                "action": action,
+                "confidence": confidence,
+            }
         return scored
