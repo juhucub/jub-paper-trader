@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     bot_symbols: str = "AAPL,MSFT,GOOG,AMZN,TSLA,NVDA"
     bot_cycle_interval_seconds: int = 60
+    bot_use_structured_signals: bool = True
     #llm_provider
     #llm_model
     #max_reasoning_tokens

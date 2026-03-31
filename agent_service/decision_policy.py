@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from backend.core.settings import get_settings
 
 @dataclass(slots=True)
 class DecisionPolicy:
@@ -11,6 +12,7 @@ class DecisionPolicy:
     max_position_concentration: float = 0.45
     max_market_volatility: float = 0.08
     min_symbol_liquidity: float = 0.0
+    use_structured_signals: bool = get_settings().bot_use_structured_signals
 
     def evaluate(
         self,
@@ -19,7 +21,7 @@ class DecisionPolicy:
         market_context: dict[str, Any],
     ) -> dict[str, Any]:
         decisions: dict[str, dict[str, Any]] = {}
-        approved_candidates: dict[str, float] = {}
+        approved_candidates: dict[str, float | dict[str, float | str]] = {}
 
         cash = float(portfolio_state.get("cash", 0.0))
         concentration = portfolio_state.get("concentration", {}) or {}
@@ -30,6 +32,14 @@ class DecisionPolicy:
             action = str(signal.get("action", "hold")).lower()
             score = float(signal.get("score", 0.0))
             confidence = float(signal.get("confidence", 0.0))
+            direction = str(signal.get("direction", "flat")).lower()
+            strength = float(signal.get("strength", abs(score)))
+            expected_horizon = str(signal.get("expected_horizon", "30m"))
+
+            if direction in {"long", "short", "flat"}:
+                action = {"long": "buy", "short": "sell", "flat": "hold"}[direction]
+                if "score" not in signal:
+                    score = strength if direction == "long" else -strength if direction == "short" else 0.0
             constraints: list[str] = []
 
             if action not in {"buy", "sell", "hold"}:
@@ -64,7 +74,16 @@ class DecisionPolicy:
                 "signal_action": action,
             }
             if policy_action in {"buy", "sell"}:
-                approved_candidates[symbol] = max(score, 0.0)
+                if self.use_structured_signals:
+                    approved_candidates[symbol] = {
+                        "direction": "long" if policy_action == "buy" else "short",
+                        "strength": max(strength, 0.0),
+                        "confidence": confidence,
+                        "expected_horizon": expected_horizon,
+                    }
+                else:
+                    approved_candidates[symbol] = max(score, 0.0)
+
 
         return {
             "approved_candidates": approved_candidates,

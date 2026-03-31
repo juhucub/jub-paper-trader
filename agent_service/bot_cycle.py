@@ -308,7 +308,7 @@ class BotCycleService:
         if not symbols:
             return "NO_DELTAS:no_symbols"
         if not deltas:
-            if signals and all(float(value.get("score", 0.0)) <= 0.0 for value in signals.values()):
+            if signals and all(self._signal_strength(value) <= 0.0 for value in signals.values()):
                 return "NO_DELTAS:all_signals_non_positive"
             if all(float(latest_prices.get(symbol, 0.0)) <= 0.0 for symbol in symbols):
                 return "NO_DELTAS:missing_or_non_positive_prices"
@@ -478,14 +478,38 @@ class BotCycleService:
             weighted = (0.5 * values["momentum"]) + (0.5 * values["mean_reversion"])
             if weighted > 0.0:
                 action = "buy"
+                direction = "long"
             elif weighted < 0.0:
                 action = "sell"
+                direction = "short"
             else:
                 action = "hold"
+                direction = "flat"
             confidence = min(1.0, abs(weighted) * 10)
-            scored[symbol] = {
-                "score": weighted,
-                "action": action,
-                "confidence": confidence,
-            }
+            expected_horizon = "15m" if abs(weighted) >= 0.02 else "30m"
+            if settings.bot_use_structured_signals:
+                scored[symbol] = {
+                    "direction": direction,
+                    "strength": abs(weighted),
+                    "confidence": confidence,
+                    "expected_horizon": expected_horizon,
+                }
+            else:
+                scored[symbol] = {
+                    "score": weighted,
+                    "action": action,
+                    "confidence": confidence,
+                }
         return scored
+    
+    @staticmethod
+    def _signal_strength(signal: dict[str, float | str]) -> float:
+        if "score" in signal:
+            return float(signal.get("score", 0.0))
+        direction = str(signal.get("direction", "flat")).lower()
+        strength = float(signal.get("strength", 0.0))
+        if direction == "long":
+            return strength
+        if direction == "short":
+            return -strength
+        return 0.0

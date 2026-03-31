@@ -11,7 +11,7 @@ class OptimizerQPO:
     Deterministic stand-in for NVIDIA QP optimizer.
 
     v1 behavior:
-    - Convert signal strengths into long-only target weights.
+    - Convert directional signal intents  into long-only target weights.
     - Reserve a configurable cash buffer.
     - Add benchmark tracking metadata for future v3 extensions.
     """
@@ -21,10 +21,21 @@ class OptimizerQPO:
 
     def optimize_target_weights(
         self,
-        scored_signals: dict[str, float],
+        signal_intents: dict[str, float | dict[str, float | str]],
         benchmark_symbol: str = "SPY",
     ) -> dict[str, float]:
-        positive = {symbol: max(score, 0.0) for symbol, score in scored_signals.items()}
+        positive: dict[str, float] = {}
+        for symbol, signal in signal_intents.items():
+            if isinstance(signal, dict):
+                direction = str(signal.get("direction", "flat")).lower()
+                strength = float(signal.get("strength", 0.0))
+                confidence = float(signal.get("confidence", 1.0))
+                if direction == "long":
+                    positive[symbol] = max(strength, 0.0) * max(confidence, 0.0)
+                else:
+                    positive[symbol] = 0.0
+                continue
+            positive[symbol] = max(float(signal), 0.0)
         total_signal = sum(positive.values())
         if total_signal <= 0:
             return {benchmark_symbol: 0.0}

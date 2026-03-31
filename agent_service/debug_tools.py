@@ -69,11 +69,19 @@ def print_symbol_summary(summary: dict) -> None:
     signal = summary.get("signal")
 
     if isinstance(signal, dict):
-        signal_display = (
-            f"action={signal.get('action')} "
-            f"score={_fmt_float(signal.get('score'), 6)} "
-            f"confidence={_fmt_float(signal.get('confidence'), 3)}"
-        )
+        if "direction" in signal:
+            signal_display = (
+                f"direction={signal.get('direction')} "
+                f"strength={_fmt_float(signal.get('strength'), 6)} "
+                f"confidence={_fmt_float(signal.get('confidence'), 3)} "
+                f"horizon={signal.get('expected_horizon')}"
+            )
+        else:
+            signal_display = (
+                f"action={signal.get('action')} "
+                f"score={_fmt_float(signal.get('score'), 6)} "
+                f"confidence={_fmt_float(signal.get('confidence'), 3)}"
+            )
     else:
         signal_display = _fmt_float(signal, 6) if signal is not None else "n/a"
 
