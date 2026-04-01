@@ -96,7 +96,7 @@ class BotCycleService:
         z_score_i = (signal_i - mean(signals)) / std(signals)
         Top 3 Highest = BUY
         Middle n = HOLD 
-        Bottom 3 Lowest = SELL
+        Bottom 3 Lowest = SELL :)
         """
 
         #FIXME: Portfolio Construction (NVIDIA QPO Optimizer to size positions)
