@@ -84,7 +84,7 @@ class BotCycleService:
         features, decision_summaries, signals = self._build_signal_inputs(symbols)
 
         sizing_context = self._plan_targets_and_deltas(
-            cycle_id=cycle_context["cycle_id"],
+            cycle_context=cycle_context,
             features=features,
             decision_summaries=decision_summaries,
             signals=signals,
@@ -158,16 +158,19 @@ class BotCycleService:
         previous_payload = self._latest_snapshot_payload()
         return {
             "cycle_id": cycle_id,
+            "started_at": started_at,
             "account": account,
             "positions": positions,
             "orders": orders,
+            "symbols": merged_symbols,
+            "previous_payload": previous_payload,
         }
-    
+            
     def _build_signal_inputs(self, symbols: list[str])-> tuple[dict[str, dict[str, float]], dict[str, dict], dict[str, dict[str, float | str]]]:
         #pull features per symbol via 30 1-minute bars, latest quote, and news sentiment (if available)
         features, decision_summaries = self._pull_features(symbols)
         signals = SignalGenerator().generate(features)
-        signals = normalize_and_rank_signals(signals, top_n=3, bottom_n=3)
+        signals = normalize_and_rank_signals(signals, top_n=1, bottom_n=1)
 
         for symbol, signal in signals.items():
             decision_summaries[symbol]["signal"] = signal
