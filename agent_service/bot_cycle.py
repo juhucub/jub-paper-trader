@@ -507,39 +507,6 @@ class BotCycleService:
             }
         return actions, adjusted
 
-    #FIXME: signals.py Adjust to account for additional feature componets and to calibrate signal strength to expected returns more effectively. Current weighting and thresholds are arbitrary and should be refined based on backtesting and live performance data.
-    def _generate_signals(self, features: dict[str, dict[str, float]]) -> dict[str, dict[str, float | str]]:
-        scored: dict[str, dict[str, float | str]] = {}
-        for symbol, values in features.items():
-            #0.5*momentum + 0.5*mean_reversion, clipped to a minimum of 0.0 to avoid negative signals
-            weighted = (0.5 * values["momentum"]) + (0.5 * values["mean_reversion"])
-            if weighted > 0.0:
-                action = "buy"
-                direction = "long"
-            elif weighted < 0.0:
-                action = "sell"
-                direction = "short"
-            else:
-                action = "hold"
-                direction = "flat"
-            confidence = min(1.0, abs(weighted) * 10)
-            expected_horizon = "15m" if abs(weighted) >= 0.02 else "30m"
-            if settings.bot_use_structured_signals:
-                scored[symbol] = {
-                    "direction": direction,
-                    "strength": abs(weighted),
-                    "confidence": confidence,
-                    "expected_horizon": expected_horizon,
-                }
-            else:
-                scored[symbol] = {
-                    "score": weighted,
-                    "action": action,
-                    "confidence": confidence,
-                }
-        #FIXME: return signal_i
-        return scored
-    
     @staticmethod
     def _signal_strength(signal: dict[str, float | str]) -> float:
         if "score" in signal:
