@@ -13,6 +13,7 @@ from db.models.portfolio import PortfolioAccountState
 from db.models.positions import Position
 from db.models.snapshots import BotCycleSnapshot
 from services.execution_router import ExecutionRouter
+from services.position_sizer import PositionSizer
 from services.portfolio_engine import PortfolioEngine
 from services.risk_guardrails import RiskGuardrails
 
@@ -107,6 +108,7 @@ def _build_service() -> tuple[BotCycleService, FakeTradingClient, object]:
         portfolio_engine=portfolio_engine,
         optimizer=OptimizerQPO(max_symbol_weight=0.4, cash_buffer=0.05),
         execution_router=ExecutionRouter(min_trade_notional=10.0),
+        position_sizer=PositionSizer(min_notional=10.0, max_position_pct=0.4),
         db_session=session,
     )
     return service, fake_trading, session
@@ -126,6 +128,11 @@ def test_bot_cycle_persists_snapshot_submits_orders_and_reconciles():
     assert isinstance(result["submitted_orders"], list)
     assert len(result["submitted_orders"]) + len(result["blocked_orders"]) >= 1
     assert len(fake_trading.submissions) == len(result["submitted_orders"])
+    assert "policy_decisions" in result
+    assert "exit_policy_actions" in result
+    assert "target_weights" in result
+    assert "adjusted_target_weights" in result
+    assert "decision_summaries" in result
 
     account = session.get(PortfolioAccountState, 1)
     assert account is not None

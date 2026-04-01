@@ -1,4 +1,4 @@
-#Execution routing helpers for converting target weights into rebalance deltas.
+#Execution routing helpers for converting target allocations into rebalance deltas.
 
 from __future__ import annotations
 
@@ -25,12 +25,17 @@ class ExecutionRouter:
         current_positions: dict[str, float],
         latest_prices: dict[str, float],
         equity: float,
+        target_notionals: dict[str, float] | None = None,
+        target_qtys: dict[str, float] | None = None,
     ) -> list[RebalanceDelta]:
         if equity <= 0:
             return []
 
         deltas: list[RebalanceDelta] = []
-        symbols = set(target_weights) | set(current_positions)
+        target_notionals = target_notionals or {}
+        target_qtys = target_qtys or {}
+
+        symbols = set(target_weights) | set(current_positions) | set(target_notionals) | set(target_qtys)
         for symbol in symbols:
             price = float(latest_prices.get(symbol, 0.0))
             if price <= 0:
@@ -40,7 +45,15 @@ class ExecutionRouter:
             current_weight = (current_qty * price) / equity
             target_weight = float(target_weights.get(symbol, 0.0))
 
-            notional_delta = (target_weight - current_weight) * equity
+            if symbol in target_qtys:
+                desired_qty = float(target_qtys[symbol])
+                notional_delta = (desired_qty - current_qty) * price
+            elif symbol in target_notionals:
+                desired_notional = float(target_notionals[symbol])
+                notional_delta = desired_notional - (current_qty * price)
+            else:
+                notional_delta = (target_weight - current_weight) * equity
+
             if abs(notional_delta) < self.min_trade_notional:
                 continue
 

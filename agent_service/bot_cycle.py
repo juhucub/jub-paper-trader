@@ -23,6 +23,7 @@ from backend.core.settings import get_settings
 from db.repositories.snapshots import create_bot_cycle_snapshot
 from db.models.snapshots import BotCycleSnapshot
 from services.execution_router import ExecutionRouter
+from services.position_sizer import PositionSizer
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class BotCycleService:
     portfolio_engine: Any
     optimizer: OptimizerQPO
     execution_router: ExecutionRouter
+    position_sizer: PositionSizer
     db_session: Any
     decision_policy: DecisionPolicy = field(default_factory=DecisionPolicy)
     exit_policy: ExitPolicy = field(default_factory=ExitPolicy)
@@ -130,6 +132,7 @@ class BotCycleService:
 
         return snapshot_payload
 
+ 
 
        
 
@@ -163,17 +166,28 @@ class BotCycleService:
     def _build_signal_inputs(self, symbols: list[str])-> tuple[dict[str, dict[str, float]], dict[str, dict], dict[str, dict[str, float | str]]]:
         #pull features per symbol via 30 1-minute bars, latest quote, and news sentiment (if available)
         features, decision_summaries = self._pull_features(symbols)
-
-        #generate raw signals_i scores from each stock i
         signals = SignalGenerator().generate(features)
-
-        #normalize each signal_i, then rank them via z-score
         signals = normalize_and_rank_signals(signals, top_n=3, bottom_n=3)
 
         for symbol, signal in signals.items():
             decision_summaries[symbol]["signal"] = signal
             decision_summaries[symbol]["decision_status"] = "SIGNAL_GENERATED"
             decision_summaries[symbol]["decision_reason"] = "signal_generated"
+        return features, decision_summaries, signals
+
+    def _plan_targets_and_deltas(
+        self,
+        cycle_context: dict[str, Any],
+        features: dict[str, dict[str, float]],
+        decision_summaries: dict[str, dict],
+        signals: dict[str, dict[str, float | str]],
+    ) -> dict[str, Any]:
+        account = cycle_context["account"]
+        positions = cycle_context["positions"]
+        orders = cycle_context["orders"]
+        previous_payload = cycle_context["previous_payload"]
+        started_at = cycle_context["started_at"]
+        symbols = cycle_context["symbols"]
 
         return features, decision_summaries, signals
 
@@ -195,12 +209,10 @@ class BotCycleService:
         cash = float(account.buying_power)
         current_positions = {p.symbol: float(p.qty) for p in positions}
         latest_prices = {symbol: payload["last_price"] for symbol, payload in features.items()}
-        
         concentration = {
             symbol: ((qty * latest_prices.get(symbol, 0.0)) / equity) if equity > 0 else 0.0
             for symbol, qty in current_positions.items()
         }
-
         market_context = {
             "volatility": self._estimate_market_volatility(features),
             "liquidity": {symbol: payload.get("avg_dollar_volume", 0.0) for symbol, payload in features.items()},
@@ -440,8 +452,7 @@ class BotCycleService:
                 decision_summaries[delta.symbol]["decision_reason"] = decision["reason"]
                 blocked_orders.append({"symbol": delta.symbol, "reason": decision["reason"]})
                 continue
-            
-            #Submit allowed market day orders to Alpaca
+
             order_type = "limit" if should_use_extended_hours else "market"
             order_request: dict[str, Any] = {
                 "symbol": delta.symbol,
