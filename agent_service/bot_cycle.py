@@ -86,9 +86,21 @@ class BotCycleService:
         #pull features per symbol via 30 1-minute bars, latest quote, and news sentiment (if available)
         features, decision_summaries = self._pull_features(symbols)
 
-        #Generate raw symbol scores/symbols
+        #FIXME: features[symbol] needs to be normalized with a z_score
+
+        #FIXME: signals_i Generate raw symbol scores for each stock i
         signals = self._generate_signals(features)
 
+        #FIXME: Convert raw symbol signals_i into relative signals
+        """
+        z_score_i = (signal_i - mean(signals)) / std(signals)
+        Top 3 Highest = BUY
+        Middle n = HOLD 
+        Bottom 3 Lowest = SELL
+        """
+
+        #FIXME: Portfolio Construction (NVIDIA QPO Optimizer to size positions)
+       
         for symbol, signal in signals.items():
             decision_summaries[symbol]["signal"] = signal
             decision_summaries[symbol]["decision_status"] = "SIGNAL_GENERATED"
@@ -410,19 +422,20 @@ class BotCycleService:
                 summary["decision_reason"] = "no_valid_closes"
                 decision_summaries[symbol] = summary
                 continue
-
-            feature_row = FeatureVector.build(
+            
+            #For each stock i, build features_i via FeatureVector.build, which includes:
+            feature_i = FeatureVector.build(
                 bars=bars,
                 quote=quote,
                 sentiment_score=sentiment_score,
             )
-            if feature_row["last_price"] <= 0:
+            if feature_i["last_price"] <= 0:
                 summary["decision_status"] = "NO_TRADE"
                 summary["decision_reason"] = "missing_or_non_positive_prices"
                 decision_summaries[symbol] = summary
                 continue
-            
-            features[symbol] = feature_row
+
+            features[symbol] = feature_i
 
         return features, decision_summaries
 
@@ -494,6 +507,7 @@ class BotCycleService:
             }
         return actions, adjusted
 
+    #FIXME: signals.py Adjust to account for additional feature componets and to calibrate signal strength to expected returns more effectively. Current weighting and thresholds are arbitrary and should be refined based on backtesting and live performance data.
     def _generate_signals(self, features: dict[str, dict[str, float]]) -> dict[str, dict[str, float | str]]:
         scored: dict[str, dict[str, float | str]] = {}
         for symbol, values in features.items():
@@ -523,6 +537,7 @@ class BotCycleService:
                     "action": action,
                     "confidence": confidence,
                 }
+        #FIXME: return signal_i
         return scored
     
     @staticmethod

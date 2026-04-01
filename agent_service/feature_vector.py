@@ -42,6 +42,7 @@ class FeatureVector:
     ) -> dict[str, float]:
         closes = [float(bar.get("c", 0.0)) for bar in bars if bar.get("c") is not None]
         volumes = [float(bar.get("v", 0.0)) for bar in bars]
+        #"ap" = ask price, "bp" = bid price. If neither is available, fall back to last close.
         last_price = float(quote.get("ap") or quote.get("bp") or (closes[-1] if closes else 0.0))
 
         return {
