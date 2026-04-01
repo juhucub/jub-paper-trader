@@ -41,6 +41,7 @@ class BotCycleService:
     exit_policy: ExitPolicy = field(default_factory=ExitPolicy)
     benchmark_symbol: str = "SPY"
 
+
     @staticmethod
     def _get_trade_hour_type(now_utc: datetime | None = None) -> str:
         current_utc = now_utc or datetime.now(timezone.utc)
@@ -75,17 +76,91 @@ class BotCycleService:
         return reservations
 
     def run_cycle(self, symbols: list[str]) -> dict[str, Any]:
+
+        cycle_context = self._load_cycle_context(symbols)
+
+        features, decision_summaries, signals = self._build_signal_inputs(symbols)
+
+        sizing_context = self._plan_targets_and_deltas(
+            cycle_id=cycle_context["cycle_id"],
+            features=features,
+            decision_summaries=decision_summaries,
+            signals=signals,
+        )
+
+        submitted_orders, blocked_orders = self._execute_deltas(
+            cycle_id=cycle_context["cycle_id"],
+            started_at=cycle_context["started_at"],
+            deltas=sizing_context["deltas"],
+            equity=sizing_context["equity"],
+            current_positions=sizing_context["current_positions"],
+            open_sell_reservations=sizing_context["open_sell_reservations"],
+            features=features,
+            decision_summaries=decision_summaries,
+            positions=cycle_context["positions"],
+        )
+        
+        for summary in decision_summaries.values():
+            print_symbol_summary(summary)
+
+        reconciliation = self._reconcile_portfolio()
+
+        snapshot_payload = {
+            "cycle_id": cycle_context["cycle_id"],
+            "started_at": cycle_context["started_at"].isoformat(),
+            "ended_at": datetime.now(timezone.utc).isoformat(),
+            "symbols": cycle_context["symbols"],
+            "benchmark_symbol": self.benchmark_symbol,
+            "features": features,
+            "signals": signals,
+            "policy_decisions": sizing_context["policy_decisions"],
+            "exit_policy_actions": sizing_context["exit_policy_actions"],
+            "exit_policy_state": sizing_context["exit_policy_state"],
+            "target_weights": sizing_context["target_weights"],
+            "adjusted_target_weights": sizing_context["adjusted_target_weights"],
+            "sized_targets": sizing_context["sized_targets"],
+            "portfolio_actions": sizing_context["portfolio_actions"],
+            "submitted_orders": submitted_orders,
+            "blocked_orders": blocked_orders,
+            "reconciliation": reconciliation,
+            "decision_summaries": decision_summaries,
+            "no_delta_reason": sizing_context["no_delta_reason"],
+        }
+        create_bot_cycle_snapshot(self.db_session, cycle_id=cycle_context["cycle_id"], payload=snapshot_payload)
+
+        return snapshot_payload
+
+
+       
+
+        #FIXME: Portfolio Construction (NVIDIA QPO Optimizer to size positions)
+       
+    
+
+    
+    
+    #------------------------------------
+    # Helper methods for cycle orchestration
+    #------------------------------------
+    def _load_cycle_context(self, symbols: list[str]) -> dict[str, Any]:
         #Create cycle metadata
         cycle_id = str(uuid4())
         started_at = datetime.now(timezone.utc)
 
-        #Load live broker context from Alpaca and include currently held symbols in feature generation.
+        #Load live broker context from Alpaca and currently held symbols in feature generation.
         account = self.alpaca_client.get_account()
         positions = self.alpaca_client.get_positions()
         orders = self.alpaca_client.get_orders(status="open", limit=200)
-        symbols = sorted({*symbols, *[p.symbol for p in positions if float(p.qty) != 0.0]})
+        merged_symbols = sorted({*symbols, *[p.symbol for p in positions if float(p.qty) != 0.0]})
         previous_payload = self._latest_snapshot_payload()
-
+        return {
+            "cycle_id": cycle_id,
+            "account": account,
+            "positions": positions,
+            "orders": orders,
+        }
+    
+    def _build_signal_inputs(self, symbols: list[str])-> tuple[dict[str, dict[str, float]], dict[str, dict], dict[str, dict[str, float | str]]]:
         #pull features per symbol via 30 1-minute bars, latest quote, and news sentiment (if available)
         features, decision_summaries = self._pull_features(symbols)
 
@@ -95,16 +170,26 @@ class BotCycleService:
         #normalize each signal_i, then rank them via z-score
         signals = normalize_and_rank_signals(signals, top_n=3, bottom_n=3)
 
-       
-        #FIXME: Convert raw symbol signals_i into relative signals
-       
-
-        #FIXME: Portfolio Construction (NVIDIA QPO Optimizer to size positions)
-       
         for symbol, signal in signals.items():
             decision_summaries[symbol]["signal"] = signal
             decision_summaries[symbol]["decision_status"] = "SIGNAL_GENERATED"
             decision_summaries[symbol]["decision_reason"] = "signal_generated"
+
+        return features, decision_summaries, signals
+
+    def _plan_targets_and_deltas(
+        self,
+        cycle_context: dict[str, Any],
+        features: dict[str, dict[str, float]],
+        decision_summaries: dict[str, dict],
+        signals: dict[str, dict[str, float | str]],
+    ) -> dict[str, Any]:
+        account = cycle_context["account"]
+        positions = cycle_context["positions"]
+        orders = cycle_context["orders"]
+        previous_payload = cycle_context["previous_payload"]
+        started_at = cycle_context["started_at"]
+        symbols = cycle_context["symbols"]
 
         equity = float(account.equity)
         cash = float(account.buying_power)
@@ -141,7 +226,72 @@ class BotCycleService:
             now_utc=started_at,
         )
         exit_policy_actions = exit_policy_result["actions"]
+        self._apply_policy_decision_annotations(decision_summaries, policy_decisions)
+        self._apply_exit_policy_actions(decision_summaries, approved_signals, exit_policy_actions)
 
+        target_weights = self.optimizer.optimize_target_weights(approved_signals, benchmark_symbol=self.benchmark_symbol)
+        self._apply_exit_actions_to_target_weights(target_weights, exit_policy_actions)
+        self._annotate_target_weights(decision_summaries, signals, target_weights)
+
+        open_sell_reservations = self._build_open_sell_reservations(orders)
+        portfolio_actions, adjusted_target_weights = self._analyze_portfolio_actions(
+            current_positions=current_positions,
+            latest_prices=latest_prices,
+            base_target_weights=target_weights,
+            features=features,
+            equity=equity,
+            previous_payload=previous_payload,
+        )
+        sized_targets = self.position_sizer.size_targets(
+            target_weights=adjusted_target_weights,
+            signals=signals,
+            current_positions=current_positions,
+            latest_prices=latest_prices,
+            feature_rows=features,
+            equity=equity,
+        )
+        target_notionals = {symbol: float(payload.get("target_notional", 0.0)) for symbol, payload in sized_targets.items()}
+        target_qtys = {symbol: float(payload.get("target_qty", 0.0)) for symbol, payload in sized_targets.items()}
+        for symbol, sizing_payload in sized_targets.items():
+            decision_summaries.setdefault(symbol, {"symbol": symbol})
+            decision_summaries[symbol]["position_sizing"] = dict(sizing_payload)
+
+        deltas = self.execution_router.to_rebalance_deltas(
+            adjusted_target_weights,
+            current_positions,
+            latest_prices,
+            equity,
+            target_notionals=target_notionals,
+            target_qtys=target_qtys,
+        )
+        no_delta_reason = self._derive_no_delta_reason(
+            symbols=symbols,
+            signals=signals,
+            target_weights=adjusted_target_weights,
+            latest_prices=latest_prices,
+            deltas=deltas,
+            equity=equity,
+        )
+        return {
+            "policy_decisions": policy_decisions,
+            "exit_policy_actions": exit_policy_actions,
+            "exit_policy_state": exit_policy_result["state"],
+            "target_weights": target_weights,
+            "adjusted_target_weights": adjusted_target_weights,
+            "sized_targets": sized_targets,
+            "portfolio_actions": portfolio_actions,
+            "deltas": deltas,
+            "no_delta_reason": no_delta_reason,
+            "open_sell_reservations": open_sell_reservations,
+            "current_positions": current_positions,
+            "equity": equity,
+        }
+    
+    @staticmethod
+    def _apply_policy_decision_annotations(
+        decision_summaries: dict[str, dict],
+        policy_decisions: dict[str, dict[str, Any]],
+    ) -> None:
         for symbol, policy_decision in policy_decisions.items():
             decision_summaries[symbol]["policy_action"] = policy_decision["policy_action"]
             decision_summaries[symbol]["policy_reason"] = policy_decision["policy_reason"]
@@ -150,6 +300,12 @@ class BotCycleService:
                 decision_summaries[symbol]["decision_status"] = "NO_TRADE"
                 decision_summaries[symbol]["decision_reason"] = policy_decision["policy_reason"]
 
+    @staticmethod
+    def _apply_exit_policy_actions(
+        decision_summaries: dict[str, dict],
+        approved_signals: dict[str, dict[str, Any]],
+        exit_policy_actions: dict[str, dict[str, Any]],
+    ) -> None:
         for symbol, position_action in exit_policy_actions.items():
             action = str(position_action.get("action", "HOLD")).upper()
             trigger = str(position_action.get("trigger", "none"))
@@ -179,9 +335,11 @@ class BotCycleService:
                 decision_summaries[symbol]["decision_status"] = "EXIT_POLICY_TRIGGERED"
                 decision_summaries[symbol]["decision_reason"] = f"exit_policy:{trigger}"
 
-        #Optimize to target weights with OptimizerQPO for policy-approved candidates, using SPY as benchmark for risk calculations
-        target_weights = self.optimizer.optimize_target_weights(approved_signals, benchmark_symbol=self.benchmark_symbol)
-
+    @staticmethod
+    def _apply_exit_actions_to_target_weights(
+        target_weights: dict[str, float],
+        exit_policy_actions: dict[str, dict[str, Any]],
+    ) -> None:
         for symbol, position_action in exit_policy_actions.items():
             action = str(position_action.get("action", "HOLD")).upper()
             if action == "EXIT":
@@ -191,38 +349,31 @@ class BotCycleService:
             elif action == "ADD":
                 target_weights[symbol] = min(1.0, float(target_weights.get(symbol, 0.0)) * 1.25)
 
+    @staticmethod
+    def _annotate_target_weights(
+        decision_summaries: dict[str, dict],
+        signals: dict[str, dict[str, float | str]],
+        target_weights: dict[str, float],
+    ) -> None:
         for symbol in decision_summaries:
             weight = float(target_weights.get(symbol, 0.0))
             decision_summaries[symbol]["target_weight"] = weight
             if symbol in signals and weight <= 0.0:
                 decision_summaries[symbol]["decision_status"] = "NO_TRADE"
-                decision_summaries[symbol]["decision_reason"] = "no_target_allocation"
-        
-        open_sell_reservations = self._build_open_sell_reservations(orders)
-
-        portfolio_actions, adjusted_target_weights = self._analyze_portfolio_actions(
-            current_positions=current_positions,
-            latest_prices=latest_prices,
-            base_target_weights=target_weights,
-            features=features,
-            equity=equity,
-            previous_payload=previous_payload,
-        )
-
-
-        #Compute rebalance deltas via ExecutionRouter
-        deltas = self.execution_router.to_rebalance_deltas(adjusted_target_weights, current_positions, latest_prices, equity)
-        no_delta_reason = self._derive_no_delta_reason(
-            symbols=symbols,
-            signals=signals,
-            target_weights=adjusted_target_weights,
-            latest_prices=latest_prices,
-            deltas=deltas,
-            equity=equity,
-        )
-
-
-        #Potential candidates to order, subject to risk guardrails
+                decision_summaries[symbol]["decision_reason"] = "no_target_allocation"   
+                
+    def _execute_deltas(
+        self,
+        cycle_id: str,
+        started_at: datetime,
+        deltas: list[Any],
+        equity: float,
+        current_positions: dict[str, float],
+        open_sell_reservations: dict[str, float],
+        features: dict[str, dict[str, float]],
+        decision_summaries: dict[str, dict],
+        positions: list[Any],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         submitted_orders: list[dict[str, Any]] = []
         blocked_orders: list[dict[str, Any]] = []
         portfolio_state = {
@@ -231,8 +382,8 @@ class BotCycleService:
             "open_positions": len([p for p in positions if float(p.qty) != 0]),
         }
         trade_hour_type = self._get_trade_hour_type(started_at)
-        should_use_extended_hours = trade_hour_type != "regular"
-        #Risk check every candidate order using guardrails
+        should_use_extended_hours = trade_hour_type != "regular" 
+
         for delta in deltas:
             if delta.side == "sell":
                 available_qty = max(
@@ -319,45 +470,20 @@ class BotCycleService:
             )
             if delta.side == "sell":
                 open_sell_reservations[delta.symbol] = float(open_sell_reservations.get(delta.symbol, 0.0)) + float(delta.qty)
-        for summary in decision_summaries.values():
-            print_symbol_summary(summary)
-
-        #Reconcile brokerage account post trade-submission
+        
+        return submitted_orders, blocked_orders
+   
+    def _reconcile_portfolio(self) -> dict[str, Any]:
         refreshed_account = self.alpaca_client.get_account()
         refreshed_positions = self.alpaca_client.get_positions()
         refreshed_orders = self.alpaca_client.get_orders(status="all", limit=200)
-        reconciliation = self.portfolio_engine.sync_account_state(
+
+        return self.portfolio_engine.sync_account_state(
             account={"cash": refreshed_account.buying_power, "equity": refreshed_account.equity},
             positions=[asdict(p) for p in refreshed_positions],
             orders=[asdict(o) for o in refreshed_orders],
-        )   
-
-
-        #Save full cyce payload snapshot to DB for auditing and debugging
-        snapshot_payload = {
-            "cycle_id": cycle_id,
-            "started_at": started_at.isoformat(),
-            "ended_at": datetime.now(timezone.utc).isoformat(),
-            "symbols": symbols,
-            "benchmark_symbol": self.benchmark_symbol,
-            "features": features,
-            "signals": signals,
-            "policy_decisions": policy_decisions,
-            "exit_policy_actions": exit_policy_actions,
-            "exit_policy_state": exit_policy_result["state"],
-            "target_weights": target_weights,
-            "adjusted_target_weights": adjusted_target_weights,
-            "portfolio_actions": portfolio_actions,
-            "submitted_orders": submitted_orders,
-            "blocked_orders": blocked_orders,
-            "reconciliation": reconciliation,
-            "decision_summaries": decision_summaries,
-            "no_delta_reason": no_delta_reason,
-        }
-        create_bot_cycle_snapshot(self.db_session, cycle_id=cycle_id, payload=snapshot_payload)
-
-        return snapshot_payload
-    
+        )
+   
     #High level reasoning for why no deltas are generated
     def _derive_no_delta_reason(
         self,
