@@ -43,6 +43,7 @@ class BotCycleService:
     exit_policy: ExitPolicy = field(default_factory=ExitPolicy)
     benchmark_symbol: str = "SPY"
 
+
     @staticmethod
     def _get_trade_hour_type(now_utc: datetime | None = None) -> str:
         current_utc = now_utc or datetime.now(timezone.utc)
@@ -77,14 +78,18 @@ class BotCycleService:
         return reservations
 
     def run_cycle(self, symbols: list[str]) -> dict[str, Any]:
+
         cycle_context = self._load_cycle_context(symbols)
-        features, decision_summaries, signals = self._build_signal_inputs(cycle_context["symbols"])
+
+        features, decision_summaries, signals = self._build_signal_inputs(symbols)
+
         sizing_context = self._plan_targets_and_deltas(
-            cycle_context=cycle_context,
+            cycle_id=cycle_context["cycle_id"],
             features=features,
             decision_summaries=decision_summaries,
             signals=signals,
         )
+
         submitted_orders, blocked_orders = self._execute_deltas(
             cycle_id=cycle_context["cycle_id"],
             started_at=cycle_context["started_at"],
@@ -96,6 +101,7 @@ class BotCycleService:
             decision_summaries=decision_summaries,
             positions=cycle_context["positions"],
         )
+        
         for summary in decision_summaries.values():
             print_symbol_summary(summary)
 
@@ -126,9 +132,25 @@ class BotCycleService:
 
         return snapshot_payload
 
+ 
+
+       
+
+        #FIXME: Portfolio Construction (NVIDIA QPO Optimizer to size positions)
+       
+    
+
+    
+    
+    #------------------------------------
+    # Helper methods for cycle orchestration
+    #------------------------------------
     def _load_cycle_context(self, symbols: list[str]) -> dict[str, Any]:
+        #Create cycle metadata
         cycle_id = str(uuid4())
         started_at = datetime.now(timezone.utc)
+
+        #Load live broker context from Alpaca and currently held symbols in feature generation.
         account = self.alpaca_client.get_account()
         positions = self.alpaca_client.get_positions()
         orders = self.alpaca_client.get_orders(status="open", limit=200)
@@ -136,22 +158,37 @@ class BotCycleService:
         previous_payload = self._latest_snapshot_payload()
         return {
             "cycle_id": cycle_id,
-            "started_at": started_at,
             "account": account,
             "positions": positions,
             "orders": orders,
-            "symbols": merged_symbols,
-            "previous_payload": previous_payload,
         }
-
-    def _build_signal_inputs(self, symbols: list[str]) -> tuple[dict[str, dict[str, float]], dict[str, dict], dict[str, dict[str, float | str]]]:
+    
+    def _build_signal_inputs(self, symbols: list[str])-> tuple[dict[str, dict[str, float]], dict[str, dict], dict[str, dict[str, float | str]]]:
+        #pull features per symbol via 30 1-minute bars, latest quote, and news sentiment (if available)
         features, decision_summaries = self._pull_features(symbols)
         signals = SignalGenerator().generate(features)
         signals = normalize_and_rank_signals(signals, top_n=3, bottom_n=3)
+
         for symbol, signal in signals.items():
             decision_summaries[symbol]["signal"] = signal
             decision_summaries[symbol]["decision_status"] = "SIGNAL_GENERATED"
             decision_summaries[symbol]["decision_reason"] = "signal_generated"
+        return features, decision_summaries, signals
+
+    def _plan_targets_and_deltas(
+        self,
+        cycle_context: dict[str, Any],
+        features: dict[str, dict[str, float]],
+        decision_summaries: dict[str, dict],
+        signals: dict[str, dict[str, float | str]],
+    ) -> dict[str, Any]:
+        account = cycle_context["account"]
+        positions = cycle_context["positions"]
+        orders = cycle_context["orders"]
+        previous_payload = cycle_context["previous_payload"]
+        started_at = cycle_context["started_at"]
+        symbols = cycle_context["symbols"]
+
         return features, decision_summaries, signals
 
     def _plan_targets_and_deltas(
@@ -261,7 +298,7 @@ class BotCycleService:
             "current_positions": current_positions,
             "equity": equity,
         }
-
+    
     @staticmethod
     def _apply_policy_decision_annotations(
         decision_summaries: dict[str, dict],
@@ -335,8 +372,8 @@ class BotCycleService:
             decision_summaries[symbol]["target_weight"] = weight
             if symbol in signals and weight <= 0.0:
                 decision_summaries[symbol]["decision_status"] = "NO_TRADE"
-                decision_summaries[symbol]["decision_reason"] = "no_target_allocation"
-
+                decision_summaries[symbol]["decision_reason"] = "no_target_allocation"   
+                
     def _execute_deltas(
         self,
         cycle_id: str,
@@ -357,7 +394,7 @@ class BotCycleService:
             "open_positions": len([p for p in positions if float(p.qty) != 0]),
         }
         trade_hour_type = self._get_trade_hour_type(started_at)
-        should_use_extended_hours = trade_hour_type != "regular"
+        should_use_extended_hours = trade_hour_type != "regular" 
 
         for delta in deltas:
             if delta.side == "sell":
@@ -444,18 +481,20 @@ class BotCycleService:
             )
             if delta.side == "sell":
                 open_sell_reservations[delta.symbol] = float(open_sell_reservations.get(delta.symbol, 0.0)) + float(delta.qty)
+        
         return submitted_orders, blocked_orders
-
+   
     def _reconcile_portfolio(self) -> dict[str, Any]:
         refreshed_account = self.alpaca_client.get_account()
         refreshed_positions = self.alpaca_client.get_positions()
         refreshed_orders = self.alpaca_client.get_orders(status="all", limit=200)
+
         return self.portfolio_engine.sync_account_state(
             account={"cash": refreshed_account.buying_power, "equity": refreshed_account.equity},
             positions=[asdict(p) for p in refreshed_positions],
             orders=[asdict(o) for o in refreshed_orders],
         )
-    
+   
     #High level reasoning for why no deltas are generated
     def _derive_no_delta_reason(
         self,
