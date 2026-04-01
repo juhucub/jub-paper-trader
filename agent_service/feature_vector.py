@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from statistics import mean, pstdev
 """ 3) Feature Engineering - feature_vector.py
 -Cleaned, raw data is transformed into signals (features) 
 
@@ -24,12 +27,6 @@ For each stock i:
 """
 
 """Feature engineering utilities for transforming market data into model-ready signals."""
-
-from __future__ import annotations
-
-from statistics import mean, pstdev
-
-
 class FeatureVector:
     """Build per-symbol feature vectors from raw bars/quotes/sentiment."""
 

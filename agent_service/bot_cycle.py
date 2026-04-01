@@ -10,19 +10,22 @@ from uuid import uuid4
 import logging 
 from zoneinfo import ZoneInfo
 from sqlalchemy import select
-from agent_service.feature_vector import FeatureVector
 
+from agent_service.feature_vector import FeatureVector
+from agent_service.normalize import normalize_and_rank_signals
+from agent_service.signals import SignalGenerator
 from agent_service.optimizer_qpo import OptimizerQPO
 from agent_service.decision_policy import DecisionPolicy
 from agent_service.exit_policy import ExitPolicy
+from agent_service.debug_tools import summarize_symbol_decision, print_symbol_summary
+
 from backend.core.settings import get_settings
 from db.repositories.snapshots import create_bot_cycle_snapshot
 from db.models.snapshots import BotCycleSnapshot
 from services.execution_router import ExecutionRouter
-from agent_service.debug_tools import summarize_symbol_decision, print_symbol_summary
+
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 
 @dataclass(slots=True)
@@ -86,18 +89,15 @@ class BotCycleService:
         #pull features per symbol via 30 1-minute bars, latest quote, and news sentiment (if available)
         features, decision_summaries = self._pull_features(symbols)
 
-        #FIXME: features[symbol] needs to be normalized with a z_score
+        #generate raw signals_i scores from each stock i
+        signals = SignalGenerator().generate(features)
 
-        #FIXME: signals_i Generate raw symbol scores for each stock i
-        signals = self._generate_signals(features)
+        #normalize each signal_i, then rank them via z-score
+        signals = normalize_and_rank_signals(signals, top_n=3, bottom_n=3)
 
+       
         #FIXME: Convert raw symbol signals_i into relative signals
-        """
-        z_score_i = (signal_i - mean(signals)) / std(signals)
-        Top 3 Highest = BUY
-        Middle n = HOLD 
-        Bottom 3 Lowest = SELL :)
-        """
+       
 
         #FIXME: Portfolio Construction (NVIDIA QPO Optimizer to size positions)
        
