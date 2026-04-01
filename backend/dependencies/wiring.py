@@ -12,6 +12,7 @@ from scheduler.cycle import BotScheduler
 from services.alpaca_client import AlpacaClient
 from services.alpaca_data import AlpacaDataClient
 from services.execution_router import ExecutionRouter
+from services.position_sizer import PositionSizer
 from services.portfolio_engine import PortfolioEngine
 from services.risk_guardrails import RiskGuardrails
 
@@ -24,6 +25,7 @@ class AppContainer:
     portfolio_engine: PortfolioEngine
     optimizer: OptimizerQPO
     execution_router: ExecutionRouter
+    position_sizer: PositionSizer
     bot_cycle_service: BotCycleService
     bot_scheduler: BotScheduler
     strategy_registry: StrategyRegistry
@@ -50,6 +52,10 @@ def build_container() -> AppContainer:
     )
     optimizer = OptimizerQPO()
     execution_router = ExecutionRouter()
+    position_sizer = PositionSizer(
+        min_notional=execution_router.min_trade_notional,
+        max_position_pct=risk_guardrails.max_position_pct,
+    )
     bot_cycle_service = BotCycleService(
         alpaca_data_client=alpaca_data_client,
         alpaca_client=alpaca_client,
@@ -57,6 +63,7 @@ def build_container() -> AppContainer:
         portfolio_engine=portfolio_engine,
         optimizer=optimizer,
         execution_router=execution_router,
+        position_sizer=position_sizer,
         db_session=db_session,
     )
     bot_scheduler = BotScheduler(orchestration_service=bot_cycle_service)
@@ -74,6 +81,7 @@ def build_container() -> AppContainer:
         portfolio_engine=portfolio_engine,
         optimizer=optimizer,
         execution_router=execution_router,
+        position_sizer=position_sizer,
         bot_cycle_service=bot_cycle_service,
         bot_scheduler=bot_scheduler,
         strategy_registry=strategy_registry,
@@ -81,4 +89,3 @@ def build_container() -> AppContainer:
 
 def get_container() -> AppContainer:
     return build_container()
-
