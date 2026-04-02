@@ -443,6 +443,19 @@ class BotCycleService:
             "current_positions": current_positions,
             "equity": equity,
         }
+
+    @staticmethod
+    def _apply_open_sell_reservations(
+        current_positions: dict[str, float],
+        open_sell_reservations: dict[str, float],
+    ) -> dict[str, float]:
+        adjusted: dict[str, float] = {}
+        symbols = set(current_positions) | set(open_sell_reservations)
+        for symbol in symbols:
+            qty = float(current_positions.get(symbol, 0.0))
+            reserved_qty = float(open_sell_reservations.get(symbol, 0.0))
+            adjusted[symbol] = max(0.0, qty - reserved_qty)
+        return adjusted
     
     @staticmethod
     def _apply_open_sell_reservations(

@@ -161,8 +161,8 @@ class MarketDataValidator:
             )
         #FIXME: ENFORCE DATA FRESHNESS
         should_enforce_quote_freshness = True
-        if self.config.enforce_quote_freshness_only_during_trading_session:
-            should_enforce_quote_freshness = self._is_active_trading_session(now)
+        if self.config.enforce_quote_freshness_only_during_regular_session:
+            should_enforce_quote_freshness = self._is_regular_trading_session(now)
         if quote_time is not None and should_enforce_quote_freshness:
             quote_age_seconds = int((now - quote_time).total_seconds())
             if quote_age_seconds > self.config.max_quote_age_seconds:
@@ -221,7 +221,7 @@ class MarketDataValidator:
         return None
 
     @staticmethod
-    def _is_active_trading_session(now_utc: datetime) -> bool:
+    def _is_regular_trading_session(now_utc: datetime) -> bool:
         now_et = now_utc.astimezone(ZoneInfo("America/New_York"))
         if now_et.weekday() >= 5:
             return False

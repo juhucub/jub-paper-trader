@@ -65,6 +65,7 @@ class FakeDataClient:
 class FakeTradingClient:
     def __init__(self):
         self.submissions: list[dict] = []
+        self.open_orders: list[FakeOrder] = []
 
     def get_account(self):
         return FakeAccount(id="acct", status="ACTIVE", currency="USD", buying_power=10_000.0, equity=10_000.0)
@@ -74,7 +75,7 @@ class FakeTradingClient:
 
     def get_orders(self, status: str | None = None, limit: int | None = None):
         _ = (status, limit)
-        return []
+        return list(self.open_orders)
 
     def submit_order(self, **kwargs):
         self.submissions.append(kwargs)
@@ -87,6 +88,15 @@ class FakeTradingClient:
             time_in_force=kwargs["time_in_force"],
             status="new",
         )
+
+class CapturingRiskGuardrails(RiskGuardrails):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.last_portfolio_state: dict | None = None
+
+    def validate_order(self, candidate_order: dict, portfolio_state: dict, market_state: dict) -> dict:
+        self.last_portfolio_state = dict(portfolio_state)
+        return super().validate_order(candidate_order, portfolio_state, market_state)
 
 
 def _build_service() -> tuple[BotCycleService, FakeTradingClient, object]:
@@ -145,19 +155,19 @@ def test_bot_cycle_sets_reason_when_all_signals_non_positive():
     result = service.run_cycle(["MSFT"])
 
     assert "MSFT" in result["decision_summaries"]
-    assert result["decision_summaries"]["MSFT"]["decision_reason"] == "no_target_allocation"
+    assert result["decision_summaries"]["MSFT"]["decision_reason"] == "short_rejected_long_only"
     assert len(result["submitted_orders"]) >= 1
 
 
-def test_bot_cycle_sets_reason_when_all_candidates_blocked():
+def test_bot_cycle_keeps_exit_orders_when_entry_candidates_are_rejected():
     service, _, _ = _build_service()
     service.risk_guardrails = RiskGuardrails(min_avg_dollar_volume=1.0, max_position_pct=0.0001)
 
     result = service.run_cycle(["AAPL"])
 
-    assert result["submitted_orders"] == []
-    assert len(result["blocked_orders"]) >= 1
-    assert result["decision_summaries"]["AAPL"]["decision_status"] == "BLOCKED"
+    assert result["policy_decisions"]["AAPL"]["policy_action"] == "skip"
+    assert any(order["side"] == "sell" for order in result["submitted_orders"])
+    assert result["decision_summaries"]["AAPL"]["decision_status"] == "SUBMITTED"
 
 
 def test_bot_cycle_persists_exit_policy_actions_and_triggers():
@@ -173,3 +183,48 @@ def test_bot_cycle_persists_exit_policy_actions_and_triggers():
     summary = result["decision_summaries"]["AAPL"]
     assert summary["position_action"] == "EXIT"
     assert summary["position_action_trigger"] == "take_profit_exit_band"
+
+
+def test_bot_cycle_passes_daily_realized_pnl_to_risk_guardrails():
+    service, _, session = _build_service()
+    capturing_guardrails = CapturingRiskGuardrails(min_avg_dollar_volume=1.0)
+    service.risk_guardrails = capturing_guardrails
+
+    account_state = session.get(PortfolioAccountState, 1)
+    assert account_state is None
+    session.add(
+        PortfolioAccountState(
+            id=1,
+            cash=10_000.0,
+            equity=10_000.0,
+            max_drawdown=0.0,
+            daily_realized_pnl=-321.25,
+        )
+    )
+    session.commit()
+
+    service.run_cycle(["AAPL"])
+
+    assert capturing_guardrails.last_portfolio_state is not None
+    assert capturing_guardrails.last_portfolio_state["daily_realized_pnl"] == -321.25
+
+
+def test_bot_cycle_does_not_duplicate_sell_when_open_sell_reservation_exists():
+    service, fake_trading, _ = _build_service()
+    fake_trading.open_orders = [
+        FakeOrder(
+            id="existing-sell-1",
+            symbol="AAPL",
+            qty=2.0,
+            side="sell",
+            type="limit",
+            time_in_force="day",
+            status="new",
+        )
+    ]
+
+    result = service.run_cycle(["AAPL"])
+
+    assert result["submitted_orders"] == []
+    assert result["blocked_orders"] == []
+    assert result["decision_summaries"]["AAPL"]["decision_reason"] != "insufficient_qty_after_open_sell_reservations"
