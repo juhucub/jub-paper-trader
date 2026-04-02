@@ -92,6 +92,8 @@ def print_symbol_summary(summary: dict) -> None:
     blocked_by = summary.get("blocked_reason")
     decision_reason = summary.get("decision_reason")
     policy_constraints = summary.get("portfolio_constraints_triggered") or []
+    reject_reasons = summary.get("reject_reasons") or []
+    reject_reason_codes = ", ".join(str(reason.get("code")) for reason in reject_reasons if reason.get("code")) or "none"
     print("\n=== BOT DECISION SUMMARY ===")
     print(f"Symbol:       {_fmt_optional(summary.get('symbol'))}")
     print(f"Bars:         {_fmt_optional(summary.get('bar_count'))}")
@@ -114,4 +116,5 @@ def print_symbol_summary(summary: dict) -> None:
     print(f"Policy:       {_fmt_optional(summary.get('policy_action'))}")
     print(f"Policy why:   {_normalize_reason(summary.get('policy_reason'))}")
     print(f"Constraints:  {', '.join(policy_constraints) if policy_constraints else 'none'}")
+    print(f"Data issues:  {reject_reason_codes}")
     print(f"Blocked by:   {_normalize_reason(blocked_by)}")
