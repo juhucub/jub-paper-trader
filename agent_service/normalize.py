@@ -9,6 +9,7 @@ def normalize_and_rank_signals(
     signals: dict[str, dict[str, float | str]],
     top_n: int = 1,
     bottom_n: int = 1,
+    debug: bool = False,
 ) -> dict[str, dict[str, float | str]]:
     """Add z-score, rank, and bucket labels to signal payloads."""
 
@@ -30,7 +31,8 @@ def normalize_and_rank_signals(
         z_score = (raw_score - avg_score) / std_score if std_score > 0 else 0.0
         clipped_z = max(-2.5, min(2.5, z_score))
         normalized_score = clipped_z / 2.5
-        print(f"Symbol: {symbol}, Raw Score: {raw_score:.4f}, Z-Score: {z_score:.4f}, Rank: {rank}")
+        if debug:
+            print(f"Symbol: {symbol}, Raw Score: {raw_score:.4f}, Z-Score: {z_score:.4f}, Rank: {rank}")
         if rank <= buy_cutoff:
             rank_bucket = "BUY"
         elif rank > len(ranked_symbols) - sell_cutoff:

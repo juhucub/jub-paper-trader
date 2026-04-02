@@ -155,7 +155,11 @@ class BotCycleService:
             symbol = str(getattr(order, "symbol", ""))
             reference_price = float(features.get(symbol, {}).get("last_price", 0.0) or 0.0)
             if reference_price <= 0.0:
-                lifecycle_actions.append({**action_base, "action": "replace_skipped", "reason": "missing_reference_price"})
+                reference_price = self._fetch_fallback_price(symbol)
+            if reference_price <= 0.0:
+                lifecycle_actions.append(
+                    {**action_base, "action": "replace_skipped", "reason": "missing_reference_price"}
+                )
                 continue
 
             current_limit_price = float(getattr(order, "limit_price", 0.0) or 0.0)
@@ -331,6 +335,11 @@ class BotCycleService:
         equity = float(account.equity)
         cash = float(account.buying_power)
         current_positions = {p.symbol: float(p.qty) for p in positions}
+        open_sell_reservations = self._build_open_sell_reservations(orders)
+        effective_current_positions = self._apply_open_sell_reservations(
+            current_positions=current_positions,
+            open_sell_reservations=open_sell_reservations,
+        )
         latest_prices, missing_price_symbols = self._build_latest_prices(features=features, positions=positions)
         self._annotate_missing_price_guardrails(
             decision_summaries=decision_summaries,
@@ -381,7 +390,6 @@ class BotCycleService:
             optimizer_allocation_diagnostics,
         )
 
-        open_sell_reservations = self._build_open_sell_reservations(orders)
         portfolio_actions, adjusted_target_weights = self._analyze_portfolio_actions(
             current_positions=current_positions,
             latest_prices=latest_prices,
@@ -406,7 +414,7 @@ class BotCycleService:
 
         deltas = self.execution_router.to_rebalance_deltas(
             adjusted_target_weights,
-            current_positions,
+            effective_current_positions,
             latest_prices,
             equity,
             target_notionals=target_notionals,
@@ -435,6 +443,19 @@ class BotCycleService:
             "current_positions": current_positions,
             "equity": equity,
         }
+
+    @staticmethod
+    def _apply_open_sell_reservations(
+        current_positions: dict[str, float],
+        open_sell_reservations: dict[str, float],
+    ) -> dict[str, float]:
+        adjusted: dict[str, float] = {}
+        symbols = set(current_positions) | set(open_sell_reservations)
+        for symbol in symbols:
+            qty = float(current_positions.get(symbol, 0.0))
+            reserved_qty = float(open_sell_reservations.get(symbol, 0.0))
+            adjusted[symbol] = max(0.0, qty - reserved_qty)
+        return adjusted
     
     def _build_latest_prices(
         self,
