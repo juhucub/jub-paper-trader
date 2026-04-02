@@ -73,9 +73,25 @@ class MarketDataValidator:
                 )
             )
 
-        timestamps = [self._parse_timestamp(bar.get("t")) for bar in bars if bar.get("t") is not None]
-        if timestamps:
-            if any(left >= right for left, right in zip(timestamps, timestamps[1:])):
+        bar_timestamps: list[datetime] = []
+        for bar in bars:
+            raw_timestamp = bar.get("t")
+            if raw_timestamp is None:
+                continue
+            parsed_timestamp = self._parse_timestamp(raw_timestamp)
+            if parsed_timestamp is None:
+                issues.append(
+                    DataQualityIssue(
+                        code="invalid_timestamp",
+                        message="Bar timestamp could not be parsed.",
+                        metadata={"symbol": symbol, "field": "bar.t", "value": str(raw_timestamp)},
+                    )
+                )
+                continue
+            bar_timestamps.append(parsed_timestamp)
+
+        if bar_timestamps:
+            if any(left >= right for left, right in zip(bar_timestamps, bar_timestamps[1:])):
                 issues.append(
                     DataQualityIssue(
                         code="non_monotonic_timestamps",
@@ -89,7 +105,7 @@ class MarketDataValidator:
                 should_enforce_bar_continuity = self._is_regular_trading_session(now)
             if should_enforce_bar_continuity:
                 max_allowed_gap = int(self.config.expected_bar_interval_seconds * 1.5)
-                for left, right in zip(timestamps, timestamps[1:]):
+                for left, right in zip(bar_timestamps, bar_timestamps[1:]):
                     gap_seconds = int((right - left).total_seconds())
                     if gap_seconds > max_allowed_gap:
                         issues.append(
@@ -133,22 +149,23 @@ class MarketDataValidator:
                 )
                 break
 
-        quote_time = self._parse_timestamp(quote.get("t"))
+        quote_time_raw = quote.get("t")
+        quote_time = self._parse_timestamp(quote_time_raw)
+        if quote_time_raw is not None and quote_time is None:
+            issues.append(
+                DataQualityIssue(
+                    code="invalid_timestamp",
+                    message="Quote timestamp could not be parsed.",
+                    metadata={"symbol": symbol, "field": "quote.t", "value": str(quote_time_raw)},
+                )
+            )
         #FIXME: ENFORCE DATA FRESHNESS
-        should_enforce_quote_freshness = False
+        should_enforce_quote_freshness = True
         if self.config.enforce_quote_freshness_only_during_trading_session:
             should_enforce_quote_freshness = self._is_active_trading_session(now)
-        latest_bar_time = timestamps[-1] if timestamps else None
         if quote_time is not None and should_enforce_quote_freshness:
             quote_age_seconds = int((now - quote_time).total_seconds())
-            quote_lag_vs_last_bar_seconds = None
-            if latest_bar_time is not None:
-                quote_lag_vs_last_bar_seconds = int(abs((quote_time - latest_bar_time).total_seconds()))
-            is_aligned_with_last_bar = (
-                quote_lag_vs_last_bar_seconds is not None
-                and quote_lag_vs_last_bar_seconds <= self.config.max_quote_delay_vs_last_bar_seconds
-            )
-            if quote_age_seconds > self.config.max_quote_age_seconds and not is_aligned_with_last_bar:
+            if quote_age_seconds > self.config.max_quote_age_seconds:
                 issues.append(
                     DataQualityIssue(
                         code="stale_quote",
@@ -157,8 +174,6 @@ class MarketDataValidator:
                             "symbol": symbol,
                             "quote_age_seconds": quote_age_seconds,
                             "max_quote_age_seconds": self.config.max_quote_age_seconds,
-                            "quote_lag_vs_last_bar_seconds": quote_lag_vs_last_bar_seconds,
-                            "max_quote_delay_vs_last_bar_seconds": self.config.max_quote_delay_vs_last_bar_seconds,
                         },
                     )
                 )
@@ -195,8 +210,11 @@ class MarketDataValidator:
         if isinstance(value, (int, float)):
             return datetime.fromtimestamp(float(value), tz=timezone.utc)
         if isinstance(value, str):
-            normalized = value.replace("Z", "+00:00")
-            parsed = datetime.fromisoformat(normalized)
+            try:
+                normalized = value.replace("Z", "+00:00")
+                parsed = datetime.fromisoformat(normalized)
+            except ValueError:
+                return None
             if parsed.tzinfo is None:
                 return parsed.replace(tzinfo=timezone.utc)
             return parsed.astimezone(timezone.utc)
