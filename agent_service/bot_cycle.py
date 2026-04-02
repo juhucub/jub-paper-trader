@@ -45,6 +45,10 @@ class BotCycleService:
     exit_policy: ExitPolicy = field(default_factory=ExitPolicy)
     benchmark_symbol: str = "SPY"
     data_validator: MarketDataValidator = field(default_factory=MarketDataValidator)
+    order_ttl_seconds: int = field(default_factory=lambda: get_settings().bot_order_ttl_seconds)
+    order_replace_enabled: bool = field(default_factory=lambda: get_settings().bot_order_replace_enabled)
+    order_replace_slippage_bps: float = field(default_factory=lambda: get_settings().bot_order_replace_slippage_bps)
+    order_replace_price_band_bps: float = field(default_factory=lambda: get_settings().bot_order_replace_price_band_bps)
 
 
     @staticmethod
@@ -80,6 +84,130 @@ class BotCycleService:
             reservations[symbol] = float(reservations.get(symbol, 0.0)) + remaining_qty
         return reservations
 
+    @staticmethod
+    def _parse_order_timestamp(raw_timestamp: Any) -> datetime | None:
+        if isinstance(raw_timestamp, datetime):
+            return raw_timestamp if raw_timestamp.tzinfo else raw_timestamp.replace(tzinfo=timezone.utc)
+        if isinstance(raw_timestamp, str):
+            try:
+                normalized = raw_timestamp.replace("Z", "+00:00")
+                parsed = datetime.fromisoformat(normalized)
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _derive_replacement_limit_price(reference_price: float, side: str, slippage_bps: float) -> float:
+        slippage_ratio = max(0.0, slippage_bps) / 10_000.0
+        if str(side).lower() == "buy":
+            return reference_price * (1.0 + slippage_ratio)
+        return reference_price * (1.0 - slippage_ratio)
+
+    def _refresh_stale_open_orders(
+        self,
+        cycle_id: str,
+        started_at: datetime,
+        orders: list[Any],
+        features: dict[str, dict[str, float]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        lifecycle_actions: list[dict[str, Any]] = []
+        replacement_submissions: list[dict[str, Any]] = []
+        if self.order_ttl_seconds <= 0:
+            return lifecycle_actions, replacement_submissions
+
+        trade_hour_type = self._get_trade_hour_type(started_at)
+        should_use_extended_hours = trade_hour_type != "regular"
+        price_band_ratio = max(0.0, self.order_replace_price_band_bps) / 10_000.0
+
+        for order in list(orders):
+            created_at = self._parse_order_timestamp(getattr(order, "submitted_at", None)) or self._parse_order_timestamp(
+                getattr(order, "created_at", None)
+            )
+            action_base: dict[str, Any] = {
+                "order_id": getattr(order, "id", None),
+                "symbol": getattr(order, "symbol", None),
+                "side": getattr(order, "side", None),
+                "status": getattr(order, "status", None),
+            }
+            if created_at is None:
+                lifecycle_actions.append({**action_base, "action": "skipped", "reason": "missing_timestamp"})
+                continue
+
+            age_seconds = (started_at - created_at.astimezone(timezone.utc)).total_seconds()
+            if age_seconds <= float(self.order_ttl_seconds):
+                continue
+
+            qty = float(getattr(order, "qty", 0.0) or 0.0)
+            filled_qty = float(getattr(order, "filled_qty", 0.0) or 0.0)
+            remaining_qty = round(max(0.0, qty - filled_qty), 4)
+            if remaining_qty <= 0.0:
+                lifecycle_actions.append({**action_base, "action": "skipped", "reason": "no_remaining_qty"})
+                continue
+
+            self.alpaca_client.cancel_order(order.id)
+            lifecycle_actions.append(
+                {**action_base, "action": "cancelled", "reason": "stale_ttl_exceeded", "age_seconds": age_seconds}
+            )
+            if not self.order_replace_enabled:
+                continue
+
+            symbol = str(getattr(order, "symbol", ""))
+            reference_price = float(features.get(symbol, {}).get("last_price", 0.0) or 0.0)
+            if reference_price <= 0.0:
+                lifecycle_actions.append({**action_base, "action": "replace_skipped", "reason": "missing_reference_price"})
+                continue
+
+            current_limit_price = float(getattr(order, "limit_price", 0.0) or 0.0)
+            if current_limit_price > 0.0 and abs(current_limit_price - reference_price) / reference_price > price_band_ratio:
+                lifecycle_actions.append({**action_base, "action": "replace_skipped", "reason": "existing_order_outside_price_band"})
+                continue
+
+            replacement_limit_price = round(
+                self._derive_replacement_limit_price(
+                    reference_price,
+                    str(getattr(order, "side", "")),
+                    self.order_replace_slippage_bps,
+                ),
+                4,
+            )
+            if abs(replacement_limit_price - reference_price) / reference_price > price_band_ratio:
+                lifecycle_actions.append({**action_base, "action": "replace_skipped", "reason": "replacement_price_outside_band"})
+                continue
+
+            replacement_order = self.alpaca_client.submit_order(
+                symbol=symbol,
+                qty=remaining_qty,
+                side=str(getattr(order, "side", "")),
+                type="limit",
+                time_in_force=str(getattr(order, "time_in_force", "day")),
+                limit_price=replacement_limit_price,
+                extended_hours=should_use_extended_hours,
+                trade_hour_type=trade_hour_type,
+                client_order_id=f"cycle-{cycle_id}-repl-{symbol}-{str(getattr(order, 'id', 'na'))[:8]}",
+            )
+            replacement_submissions.append(
+                {
+                    "id": replacement_order.id,
+                    "symbol": replacement_order.symbol,
+                    "side": replacement_order.side,
+                    "qty": replacement_order.qty,
+                    "trade_hour_type": trade_hour_type,
+                    "source": "replace_stale_order",
+                }
+            )
+            orders.append(replacement_order)
+            lifecycle_actions.append(
+                {
+                    **action_base,
+                    "action": "replaced",
+                    "replacement_order_id": replacement_order.id,
+                    "replacement_limit_price": replacement_limit_price,
+                    "age_seconds": age_seconds,
+                }
+            )
+        return lifecycle_actions, replacement_submissions
+
     def run_cycle(self, symbols: list[str]) -> dict[str, Any]:
 
         cycle_context = self._load_cycle_context(symbols)
@@ -92,6 +220,13 @@ class BotCycleService:
             decision_summaries=decision_summaries,
             signals=signals,
         )
+        order_lifecycle_actions, pre_execution_submitted_orders = self._refresh_stale_open_orders(
+            cycle_id=cycle_context["cycle_id"],
+            started_at=cycle_context["started_at"],
+            orders=cycle_context["orders"],
+            features=features,
+        )
+        sizing_context["open_sell_reservations"] = self._build_open_sell_reservations(cycle_context["orders"])
 
         submitted_orders, blocked_orders = self._execute_deltas(
             cycle_id=cycle_context["cycle_id"],
@@ -104,6 +239,8 @@ class BotCycleService:
             decision_summaries=decision_summaries,
             positions=cycle_context["positions"],
         )
+
+        submitted_orders = pre_execution_submitted_orders + submitted_orders
         
         for summary in decision_summaries.values():
             print_symbol_summary(summary)
@@ -128,6 +265,7 @@ class BotCycleService:
             "portfolio_actions": sizing_context["portfolio_actions"],
             "submitted_orders": submitted_orders,
             "blocked_orders": blocked_orders,
+            "order_lifecycle_actions": order_lifecycle_actions,
             "reconciliation": reconciliation,
             "decision_summaries": decision_summaries,
             "no_delta_reason": sizing_context["no_delta_reason"],
@@ -139,9 +277,6 @@ class BotCycleService:
 
         #FIXME: Portfolio Construction (NVIDIA QPO Optimizer to size positions)
        
-    
-
-    
     
     #------------------------------------
     # Helper methods for cycle orchestration

@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     bot_symbols: str = "AAPL,MSFT,GOOG,AMZN,TSLA,NVDA"
     bot_cycle_interval_seconds: int = 60
     bot_use_structured_signals: bool = True
+    bot_order_ttl_seconds: int = 180
+    bot_order_replace_slippage_bps: float = 15.0
+    bot_order_replace_price_band_bps: float = 75.0
+    bot_order_replace_enabled: bool = True
     #llm_provider
     #llm_model
     #max_reasoning_tokens

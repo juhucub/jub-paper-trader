@@ -41,6 +41,9 @@ class AlpacaOrder:
     type: str
     time_in_force: str
     status: str
+    created_at: str | None = None
+    submitted_at: str | None = None
+    limit_price: float | None = None
     filled_qty: float = 0.0
     filled_avg_price: float | None = None
 
@@ -117,6 +120,9 @@ class AlpacaClient:
                 type=item["type"],
                 time_in_force=item["time_in_force"],
                 status=item.get("status", "unknown"),
+                created_at=item.get("created_at"),
+                submitted_at=item.get("submitted_at"),
+                limit_price=_to_optional_float(item.get("limit_price")),
                 filled_qty=_to_optional_float(item.get("filled_qty")) or 0.0,
                 filled_avg_price=_to_optional_float(item.get("filled_avg_price")),
             )
@@ -168,6 +174,9 @@ class AlpacaClient:
             type=payload["type"],
             time_in_force=payload["time_in_force"],
             status=payload.get("status", "unknown"),
+            created_at=payload.get("created_at"),
+            submitted_at=payload.get("submitted_at"),
+            limit_price=_to_optional_float(payload.get("limit_price")),
             filled_qty=_to_optional_float(payload.get("filled_qty")) or 0.0,
             filled_avg_price=_to_optional_float(payload.get("filled_avg_price")),
         )
@@ -185,6 +194,9 @@ class AlpacaClient:
             type=payload["type"],
             time_in_force=payload["time_in_force"],
             status=payload.get("status", "unknown"),
+            created_at=payload.get("created_at"),
+            submitted_at=payload.get("submitted_at"),
+            limit_price=_to_optional_float(payload.get("limit_price")),
             filled_qty=_to_optional_float(payload.get("filled_qty")) or 0.0,
             filled_avg_price=_to_optional_float(payload.get("filled_avg_price")),
             
