@@ -21,6 +21,7 @@ from agent_service.debug_tools import summarize_symbol_decision, print_symbol_su
 
 from backend.core.settings import get_settings
 from db.repositories.snapshots import create_bot_cycle_snapshot
+from db.models.portfolio import PortfolioAccountState
 from db.models.snapshots import BotCycleSnapshot
 from services.execution_router import ExecutionRouter
 from services.position_sizer import PositionSizer
@@ -132,9 +133,6 @@ class BotCycleService:
 
         return snapshot_payload
 
- 
-
-       
 
         #FIXME: Portfolio Construction (NVIDIA QPO Optimizer to size positions)
        
@@ -391,9 +389,10 @@ class BotCycleService:
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         submitted_orders: list[dict[str, Any]] = []
         blocked_orders: list[dict[str, Any]] = []
+        daily_realized_pnl = self._current_daily_realized_pnl(started_at)
         portfolio_state = {
             "equity": equity,
-            "daily_realized_pnl": 0.0,
+            "daily_realized_pnl": daily_realized_pnl,
             "open_positions": len([p for p in positions if float(p.qty) != 0]),
         }
         trade_hour_type = self._get_trade_hour_type(started_at)
@@ -487,6 +486,22 @@ class BotCycleService:
         
         return submitted_orders, blocked_orders
    
+    def _current_daily_realized_pnl(self, started_at: datetime) -> float:
+        account_state = self.db_session.get(PortfolioAccountState, 1)
+        if not account_state:
+            return 0.0
+
+        cycle_date = started_at.astimezone(timezone.utc).date()
+        #If daily_date differs from current cycle UTC: reset, update, and flush
+        if account_state.daily_date != cycle_date:
+            account_state.daily_date = cycle_date
+            account_state.daily_realized_pnl = 0.0
+            account_state.updated_at = datetime.now(timezone.utc)
+            self.db_session.flush()
+            return 0.0
+
+        return float(account_state.daily_realized_pnl or 0.0)
+
     def _reconcile_portfolio(self) -> dict[str, Any]:
         refreshed_account = self.alpaca_client.get_account()
         refreshed_positions = self.alpaca_client.get_positions()
