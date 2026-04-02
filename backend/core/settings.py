@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     bot_order_replace_slippage_bps: float = 15.0
     bot_order_replace_price_band_bps: float = 75.0
     bot_order_replace_enabled: bool = True
+    bot_max_quote_age_seconds: int = 1200
+    bot_enforce_quote_freshness_only_during_trading_session: bool = True
     #llm_provider
     #llm_model
     #max_reasoning_tokens

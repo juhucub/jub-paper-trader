@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from agent_service.bot_cycle import BotCycleService
+from agent_service.data_quality import DataQualityConfig, MarketDataValidator
 from agent_service.optimizer_qpo import OptimizerQPO
 from agent_service.strategy import StrategyDefinition, StrategyRegistry
 from backend.core.settings import Settings, get_settings
@@ -65,7 +66,16 @@ def build_container() -> AppContainer:
         execution_router=execution_router,
         position_sizer=position_sizer,
         db_session=db_session,
+        data_validator=MarketDataValidator(
+            DataQualityConfig(
+                max_quote_age_seconds=settings.bot_max_quote_age_seconds,
+                enforce_quote_freshness_only_during_trading_session=(
+                    settings.bot_enforce_quote_freshness_only_during_trading_session
+                ),
+            )
+        ),
     )
+    
     bot_scheduler = BotScheduler(orchestration_service=bot_cycle_service)
 
     strategy_registry = StrategyRegistry()
