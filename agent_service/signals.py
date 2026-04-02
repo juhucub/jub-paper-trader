@@ -11,7 +11,7 @@ class SignalModelConfig:
 
     momentum_weight: float = 0.28
     mean_reversion_weight: float = 0.22
-    returns_weight: float = 0.16
+    short_return_weight: float = 0.16
     sentiment_weight: float = 0.14
     volatility_penalty: float = 0.10
     spread_penalty: float = 0.06
@@ -77,7 +77,7 @@ class SignalGenerator:
         score = (
             cfg.momentum_weight * float(feature_row.get("momentum", 0.0))
             + cfg.mean_reversion_weight * float(feature_row.get("mean_reversion", 0.0))
-            + cfg.returns_weight * float(feature_row.get("returns", 0.0))
+            + cfg.short_return_weight * float(feature_row.get("returns", 0.0))
             + cfg.sentiment_weight * float(feature_row.get("sentiment_score", 0.0))
             + cfg.volume_trend_weight * float(feature_row.get("volume_trend", 0.0))
             - cfg.volatility_penalty * float(feature_row.get("volatility", 0.0))

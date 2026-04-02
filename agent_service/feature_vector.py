@@ -55,15 +55,24 @@ class FeatureVector:
             "sentiment_score": float(sentiment_score),
         }
 
-    @staticmethod
-    def momentum(closes: list[float]) -> float:
+    def _endpoint_return(closes: list[float], lookback_bars: int) -> float:
         if len(closes) < 2:
             return 0.0
-        start = closes[0]
-        end = closes[-1]
+        
+        if lookback_bars <= 1:
+            return 0.0
+
+        window = closes[-lookback_bars:] if len(closes) >= lookback_bars else closes
+        start = window[0]
+        end = window[-1]
         if start <= 0:
             return 0.0
         return (end - start) / start
+    
+    @staticmethod
+    def momentum(closes: list[float]) -> float:
+        # Medium-horizon trend proxy (distinct from short-term endpoint return).
+        return FeatureVector._endpoint_return(closes, lookback_bars=20)
 
     @staticmethod
     def mean_reversion(closes: list[float]) -> float:
@@ -124,10 +133,5 @@ class FeatureVector:
 
     @staticmethod
     def returns(closes: list[float]) -> float:
-        if len(closes) < 2:
-            return 0.0
-        start = closes[0]
-        end = closes[-1]
-        if start <= 0:
-            return 0.0
-        return (end - start) / start
+        # Short-horizon endpoint return over the most recent bars.
+        return FeatureVector._endpoint_return(closes, lookback_bars=5)
