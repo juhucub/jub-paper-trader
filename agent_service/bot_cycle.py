@@ -331,7 +331,11 @@ class BotCycleService:
         equity = float(account.equity)
         cash = float(account.buying_power)
         current_positions = {p.symbol: float(p.qty) for p in positions}
-        latest_prices = {symbol: payload["last_price"] for symbol, payload in features.items()}
+        latest_prices, missing_price_symbols = self._build_latest_prices(features=features, positions=positions)
+        self._annotate_missing_price_guardrails(
+            decision_summaries=decision_summaries,
+            missing_price_symbols=missing_price_symbols,
+        )
         concentration = {
             symbol: ((qty * latest_prices.get(symbol, 0.0)) / equity) if equity > 0 else 0.0
             for symbol, qty in current_positions.items()
@@ -432,6 +436,65 @@ class BotCycleService:
             "equity": equity,
         }
     
+    def _build_latest_prices(
+        self,
+        features: dict[str, dict[str, float]],
+        positions: list[Any],
+    ) -> tuple[dict[str, float], set[str]]:
+        latest_prices: dict[str, float] = {}
+        for symbol, payload in features.items():
+            price = float(payload.get("last_price", 0.0) or 0.0)
+            if price > 0.0:
+                latest_prices[symbol] = price
+
+        missing_price_symbols: set[str] = set()
+        for position in positions:
+            symbol = str(getattr(position, "symbol", "")).upper()
+            qty = float(getattr(position, "qty", 0.0) or 0.0)
+            if not symbol or qty == 0.0:
+                continue
+            if latest_prices.get(symbol, 0.0) > 0.0:
+                continue
+
+            broker_price = float(getattr(position, "current_price", 0.0) or 0.0)
+            if broker_price > 0.0:
+                latest_prices[symbol] = broker_price
+                continue
+
+            fallback_price = self._fetch_fallback_price(symbol)
+            if fallback_price > 0.0:
+                latest_prices[symbol] = fallback_price
+                continue
+
+            missing_price_symbols.add(symbol)
+
+        return latest_prices, missing_price_symbols
+
+    def _fetch_fallback_price(self, symbol: str) -> float:
+        try:
+            quote = self.alpaca_data_client.get_latest_quote(symbol)
+        except Exception:
+            logger.warning("Unable to fetch fallback quote price for symbol=%s", symbol, exc_info=True)
+            return 0.0
+        return float(quote.get("ap") or quote.get("bp") or 0.0)
+
+    @staticmethod
+    def _annotate_missing_price_guardrails(
+        decision_summaries: dict[str, dict[str, Any]],
+        missing_price_symbols: set[str],
+    ) -> None:
+        for symbol in sorted(missing_price_symbols):
+            decision_summaries.setdefault(symbol, {"symbol": symbol})
+            decision_summaries[symbol]["decision_status"] = "NO_TRADE"
+            decision_summaries[symbol]["decision_reason"] = "missing_price_fallback_failed"
+            decision_summaries[symbol].setdefault("reject_reasons", []).append(
+                {
+                    "code": "missing_price_fallback_failed",
+                    "message": "No usable price from features, broker position current_price, or quote fallback.",
+                    "metadata": {"symbol": symbol},
+                }
+            )
+            
     @staticmethod
     def _apply_policy_decision_annotations(
         decision_summaries: dict[str, dict],

@@ -41,7 +41,7 @@ class ExitPolicy:
             if last_price <= 0.0:
                 actions[symbol] = {
                     "action": "HOLD",
-                    "trigger": "missing_last_price",
+                    "trigger": "missing_price_fallback_failed",
                     "trigger_type": "guardrail",
                 }
                 continue
