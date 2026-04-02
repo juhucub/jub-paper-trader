@@ -161,7 +161,7 @@ class MarketDataValidator:
             )
         #FIXME: ENFORCE DATA FRESHNESS
         should_enforce_quote_freshness = True
-        if self.config.enforce_quote_freshness_only_during_regular_session:
+        if self.config.enforce_quote_freshness_only_during_trading_session:
             should_enforce_quote_freshness = self._is_regular_trading_session(now)
         if quote_time is not None and should_enforce_quote_freshness:
             quote_age_seconds = int((now - quote_time).total_seconds())
