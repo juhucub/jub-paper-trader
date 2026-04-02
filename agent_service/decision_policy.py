@@ -35,6 +35,9 @@ class DecisionPolicy:
             direction = str(signal.get("direction", "flat")).lower()
             strength = float(signal.get("strength", abs(score)))
             expected_horizon = str(signal.get("expected_horizon", "30m"))
+            current_qty = float((portfolio_state.get("positions", {}) or {}).get(symbol, 0.0))
+            is_short_intent = action == "sell" or direction == "short"
+            allow_exit_only = is_short_intent and current_qty > 0.0
 
             if direction in {"long", "short", "flat"}:
                 action = {"long": "buy", "short": "sell", "flat": "hold"}[direction]
@@ -56,12 +59,16 @@ class DecisionPolicy:
                 constraints.append("position_concentration_limit")
             if action == "buy" and float(liquidity_map.get(symbol, 0.0)) < self.min_symbol_liquidity:
                 constraints.append("insufficient_liquidity")
+            if is_short_intent and not allow_exit_only:
+                constraints.append("short_rejected_long_only")
 
             policy_action = action
             policy_reason = "policy_approved"
             if constraints:
                 policy_action = "skip"
                 policy_reason = constraints[0]
+            elif allow_exit_only:
+                policy_reason = "short_converted_to_exit_only"
             elif action == "hold":
                 policy_reason = "signal_hold"
 
@@ -76,13 +83,13 @@ class DecisionPolicy:
             if policy_action in {"buy", "sell"}:
                 if self.use_structured_signals:
                     approved_candidates[symbol] = {
-                        "direction": "long" if policy_action == "buy" else "short",
-                        "strength": max(strength, 0.0),
+                        "direction": "long" if policy_action == "buy" else "flat",
+                        "strength": max(strength, 0.0) if policy_action == "buy" else 0.0,
                         "confidence": confidence,
                         "expected_horizon": expected_horizon,
                     }
                 else:
-                    approved_candidates[symbol] = max(score, 0.0)
+                    approved_candidates[symbol] = max(score, 0.0) if policy_action == "buy" else 0.0
 
 
         return {

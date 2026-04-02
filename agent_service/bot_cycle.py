@@ -372,8 +372,18 @@ class BotCycleService:
             weight = float(target_weights.get(symbol, 0.0))
             decision_summaries[symbol]["target_weight"] = weight
             if symbol in signals and weight <= 0.0:
-                decision_summaries[symbol]["decision_status"] = "NO_TRADE"
-                decision_summaries[symbol]["decision_reason"] = "no_target_allocation"   
+                signal_direction = str(signals[symbol].get("direction", "flat")).lower()
+                policy_reason = str(decision_summaries[symbol].get("policy_reason", ""))
+                if "short_rejected_long_only" in policy_reason or signal_direction == "short":
+                    decision_summaries[symbol]["decision_status"] = "NO_TRADE"
+                    decision_summaries[symbol]["decision_reason"] = "short_rejected_long_only"
+                    continue
+                if decision_summaries[symbol].get("decision_reason") not in {
+                    "short_rejected_long_only",
+                    "short_converted_to_exit_only",
+                }:
+                    decision_summaries[symbol]["decision_status"] = "NO_TRADE"
+                    decision_summaries[symbol]["decision_reason"] = "no_target_allocation" 
                 
     def _execute_deltas(
         self,
