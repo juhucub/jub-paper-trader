@@ -75,6 +75,7 @@ def build_container() -> AppContainer:
             )
         ),
     )
+    
     bot_scheduler = BotScheduler(orchestration_service=bot_cycle_service)
 
     strategy_registry = StrategyRegistry()

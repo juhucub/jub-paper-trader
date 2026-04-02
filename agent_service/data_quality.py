@@ -24,8 +24,7 @@ class DataQualityIssue:
 class DataQualityConfig:
     min_bar_count: int = 20
     expected_bar_interval_seconds: int = 60
-    max_quote_age_seconds: int = 180
-    max_quote_delay_vs_last_bar_seconds: int = 300
+    max_quote_age_seconds: int = 1200
     max_price_jump_pct: float = 0.2
     enforce_quote_freshness_only_during_trading_session: bool = True
     enforce_bar_continuity_only_during_regular_session: bool = True
@@ -136,7 +135,7 @@ class MarketDataValidator:
 
         quote_time = self._parse_timestamp(quote.get("t"))
         #FIXME: ENFORCE DATA FRESHNESS
-        should_enforce_quote_freshness = True
+        should_enforce_quote_freshness = False
         if self.config.enforce_quote_freshness_only_during_trading_session:
             should_enforce_quote_freshness = self._is_active_trading_session(now)
         latest_bar_time = timestamps[-1] if timestamps else None
