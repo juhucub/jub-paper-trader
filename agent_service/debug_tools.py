@@ -61,6 +61,7 @@ def summarize_symbol_decision(symbol: str, bars: list[dict], quote: dict) -> dic
         "policy_action": None,
         "policy_reason": None,
         "portfolio_constraints_triggered": [],
+        "reject_reasons": [],
     }
 
 def print_symbol_summary(summary: dict) -> None:

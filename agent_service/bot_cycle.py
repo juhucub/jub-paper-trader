@@ -17,6 +17,7 @@ from agent_service.signals import SignalGenerator
 from agent_service.optimizer_qpo import OptimizerQPO
 from agent_service.decision_policy import DecisionPolicy
 from agent_service.exit_policy import ExitPolicy
+from agent_service.data_quality import MarketDataValidator
 from agent_service.debug_tools import summarize_symbol_decision, print_symbol_summary
 
 from backend.core.settings import get_settings
@@ -43,6 +44,7 @@ class BotCycleService:
     decision_policy: DecisionPolicy = field(default_factory=DecisionPolicy)
     exit_policy: ExitPolicy = field(default_factory=ExitPolicy)
     benchmark_symbol: str = "SPY"
+    data_validator: MarketDataValidator = field(default_factory=MarketDataValidator)
 
 
     @staticmethod
@@ -378,7 +380,7 @@ class BotCycleService:
                     "rank_component": float(per_symbol_diagnostics[symbol].get("rank_component", 0.0)),
                     "final_relative_weight": float(per_symbol_diagnostics[symbol].get("final_relative_weight", 0.0)),
                 }
-                
+
             if symbol in signals and weight <= 0.0:
                 signal_direction = str(signals[symbol].get("direction", "flat")).lower()
                 policy_reason = str(decision_summaries[symbol].get("policy_reason", ""))
@@ -581,20 +583,16 @@ class BotCycleService:
             summary = summarize_symbol_decision(symbol, bars, quote)
             decision_summaries[symbol] = summary
 
-            closes = [float(bar.get("c", 0.0)) for bar in bars if bar.get("c") is not None]
             sentiment_score = self._get_news_score(symbol)
+            quality_issues = self.data_validator.validate(symbol=symbol, bars=bars, quote=quote)
+            summary["reject_reasons"] = [issue.as_dict() for issue in quality_issues]
 
-            if not bars:
+            if quality_issues:
                 summary["decision_status"] = "NO_TRADE"
-                summary["decision_reason"] = "no_bars_returned"
+                summary["decision_reason"] = "quality_issues"
                 decision_summaries[symbol] = summary
                 continue
 
-            if not closes:
-                summary["decision_status"] = "NO_TRADE"
-                summary["decision_reason"] = "no_valid_closes"
-                decision_summaries[symbol] = summary
-                continue
             
             #For each stock i, build features_i via FeatureVector.build, which includes:
             feature_i = FeatureVector.build(
@@ -605,6 +603,13 @@ class BotCycleService:
             if feature_i["last_price"] <= 0:
                 summary["decision_status"] = "NO_TRADE"
                 summary["decision_reason"] = "missing_or_non_positive_prices"
+                summary.setdefault("reject_reasons", []).append(
+                    {
+                        "code": "non_positive_price",
+                        "message": "FeatureVector produced non-positive last_price.",
+                        "metadata": {"symbol": symbol, "last_price": feature_i["last_price"]},
+                    }
+                )
                 decision_summaries[symbol] = summary
                 continue
 
