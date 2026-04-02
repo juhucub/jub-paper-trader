@@ -28,6 +28,8 @@ def normalize_and_rank_signals(
         signal = signals[symbol]
         raw_score = raw_scores[symbol]
         z_score = (raw_score - avg_score) / std_score if std_score > 0 else 0.0
+        clipped_z = max(-2.5, min(2.5, z_score))
+        normalized_score = clipped_z / 2.5
         print(f"Symbol: {symbol}, Raw Score: {raw_score:.4f}, Z-Score: {z_score:.4f}, Rank: {rank}")
         if rank <= buy_cutoff:
             rank_bucket = "BUY"
@@ -37,7 +39,9 @@ def normalize_and_rank_signals(
             rank_bucket = "HOLD"
 
         signal["z_score"] = z_score
+        signal["normalized_score"] = normalized_score
         signal["rank"] = rank
         signal["rank_bucket"] = rank_bucket
-
+        signal["universe_size"] = len(ranked_symbols)
+        
     return signals

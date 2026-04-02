@@ -87,6 +87,12 @@ class DecisionPolicy:
                         "strength": max(strength, 0.0) if policy_action == "buy" else 0.0,
                         "confidence": confidence,
                         "expected_horizon": expected_horizon,
+                        "raw_score": score,
+                        "z_score": float(signal.get("z_score", 0.0)),
+                        "rank": int(signal.get("rank", 0) or 0),
+                        "rank_bucket": str(signal.get("rank_bucket", "HOLD")),
+                        "normalized_score": float(signal.get("normalized_score", signal.get("z_score", 0.0))),
+                        "universe_size": int(signal.get("universe_size", len(signals))),
                     }
                 else:
                     approved_candidates[symbol] = max(score, 0.0) if policy_action == "buy" else 0.0

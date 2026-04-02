@@ -99,11 +99,17 @@ class FeatureVector:
     def bid_ask_spread(quote: dict) -> float:
         ask = float(quote.get("ap") or 0.0)
         bid = float(quote.get("bp") or 0.0)
+        
         if ask <= 0.0 or bid <= 0.0:
             return 0.0
-        mid = (ask + bid) / 2
-        if mid <= 0:
+        if ask < bid:
             return 0.0
+
+        mid = (ask + bid) / 2.0
+        if mid <= 0.0:
+            return 0.0
+
+    
         return (ask - bid) / mid
 
     @staticmethod

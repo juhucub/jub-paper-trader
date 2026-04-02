@@ -120,6 +120,7 @@ class BotCycleService:
             "exit_policy_actions": sizing_context["exit_policy_actions"],
             "exit_policy_state": sizing_context["exit_policy_state"],
             "target_weights": sizing_context["target_weights"],
+            "optimizer_allocation_diagnostics": sizing_context["optimizer_allocation_diagnostics"],
             "adjusted_target_weights": sizing_context["adjusted_target_weights"],
             "sized_targets": sizing_context["sized_targets"],
             "portfolio_actions": sizing_context["portfolio_actions"],
@@ -190,22 +191,6 @@ class BotCycleService:
         started_at = cycle_context["started_at"]
         symbols = cycle_context["symbols"]
 
-        return features, decision_summaries, signals
-
-    def _plan_targets_and_deltas(
-        self,
-        cycle_context: dict[str, Any],
-        features: dict[str, dict[str, float]],
-        decision_summaries: dict[str, dict],
-        signals: dict[str, dict[str, float | str]],
-    ) -> dict[str, Any]:
-        account = cycle_context["account"]
-        positions = cycle_context["positions"]
-        orders = cycle_context["orders"]
-        previous_payload = cycle_context["previous_payload"]
-        started_at = cycle_context["started_at"]
-        symbols = cycle_context["symbols"]
-
         equity = float(account.equity)
         cash = float(account.buying_power)
         current_positions = {p.symbol: float(p.qty) for p in positions}
@@ -242,9 +227,18 @@ class BotCycleService:
         self._apply_policy_decision_annotations(decision_summaries, policy_decisions)
         self._apply_exit_policy_actions(decision_summaries, approved_signals, exit_policy_actions)
 
-        target_weights = self.optimizer.optimize_target_weights(approved_signals, benchmark_symbol=self.benchmark_symbol)
+        target_weights, optimizer_allocation_diagnostics = self.optimizer.optimize_target_weights(
+            approved_signals,
+            benchmark_symbol=self.benchmark_symbol,
+            return_diagnostics=True,
+        )
         self._apply_exit_actions_to_target_weights(target_weights, exit_policy_actions)
-        self._annotate_target_weights(decision_summaries, signals, target_weights)
+        self._annotate_target_weights(
+            decision_summaries,
+            signals,
+            target_weights,
+            optimizer_allocation_diagnostics,
+        )
 
         open_sell_reservations = self._build_open_sell_reservations(orders)
         portfolio_actions, adjusted_target_weights = self._analyze_portfolio_actions(
@@ -290,6 +284,7 @@ class BotCycleService:
             "exit_policy_actions": exit_policy_actions,
             "exit_policy_state": exit_policy_result["state"],
             "target_weights": target_weights,
+            "optimizer_allocation_diagnostics": optimizer_allocation_diagnostics,
             "adjusted_target_weights": adjusted_target_weights,
             "sized_targets": sized_targets,
             "portfolio_actions": portfolio_actions,
@@ -367,10 +362,23 @@ class BotCycleService:
         decision_summaries: dict[str, dict],
         signals: dict[str, dict[str, float | str]],
         target_weights: dict[str, float],
+        optimizer_allocation_diagnostics: dict[str, Any] | None = None,
     ) -> None:
+        per_symbol_diagnostics = (optimizer_allocation_diagnostics or {}).get("per_symbol", {})
         for symbol in decision_summaries:
             weight = float(target_weights.get(symbol, 0.0))
             decision_summaries[symbol]["target_weight"] = weight
+
+            if symbol in per_symbol_diagnostics:
+                decision_summaries[symbol]["allocation_contributions"] = {
+                    "raw": float(per_symbol_diagnostics[symbol].get("raw_contribution", 0.0)),
+                    "normalized": float(
+                        per_symbol_diagnostics[symbol].get("normalized_allocation_contribution", 0.0)
+                    ),
+                    "rank_component": float(per_symbol_diagnostics[symbol].get("rank_component", 0.0)),
+                    "final_relative_weight": float(per_symbol_diagnostics[symbol].get("final_relative_weight", 0.0)),
+                }
+                
             if symbol in signals and weight <= 0.0:
                 signal_direction = str(signals[symbol].get("direction", "flat")).lower()
                 policy_reason = str(decision_summaries[symbol].get("policy_reason", ""))

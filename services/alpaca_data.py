@@ -54,7 +54,25 @@ class AlpacaDataClient:
             headers=self._headers,
         )
         response.raise_for_status()
-        return response.json()["quote"]
+        quote = dict(response.json()["quote"])
+        bid = float(quote.get("bp") or 0.0)
+        ask = float(quote.get("ap") or 0.0)
+        if bid > 0.0 and ask > 0.0:
+            return quote
+
+        trade = self.get_latest_trade(symbol)
+        trade_price = float(trade.get("p") or 0.0)
+        if trade_price <= 0.0:
+            return quote
+
+        quote.setdefault("bp", trade_price)
+        quote.setdefault("ap", trade_price)
+        if float(quote.get("bp") or 0.0) <= 0.0:
+            quote["bp"] = trade_price
+        if float(quote.get("ap") or 0.0) <= 0.0:
+            quote["ap"] = trade_price
+        quote.setdefault("t", trade.get("t"))
+        return quote
 
     def get_latest_trade(self, symbol: str) -> dict[str, Any]:
         response = self._client.get(

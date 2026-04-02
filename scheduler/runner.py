@@ -62,7 +62,7 @@ def configure_logging() -> None:
     )
     
 def main(argv: Sequence[str] | None = None) -> int:
-    configure_logging()
+    #configure_logging()
 
     parser = build_parser()
     args = parser.parse_args(argv)
