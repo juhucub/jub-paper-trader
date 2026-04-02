@@ -47,7 +47,10 @@ class RiskGuardrails:
 
         equity = float(portfolio_state.get("equity", 0.0))
         notional = qty * max(price, 0.0)
-        if equity > 0 and (notional / equity) > self.max_position_pct:
+        # Position-size cap should only prevent opening/increasing exposure.
+        # Sell orders in this strategy are used to reduce existing long positions,
+        # so they should not be blocked by the max-position gate.
+        if side == "buy" and equity > 0 and (notional / equity) > self.max_position_pct:
             return {"allowed": False, "reason": "max_position_pct_exceeded"}
 
         current_open_positions = int(portfolio_state.get("open_positions", 0))
