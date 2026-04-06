@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     alpaca_base_url: str = "https://paper-api.alpaca.markets"
     alpaca_data_url: str = "https://data.alpaca.markets"
 
-    bot_symbols: str = "AAPL,MSFT,GOOG,AMZN,TSLA,NVDA"
+    bot_symbols: str = "AAPL,MSFT,NVDA,AMZN,GOOG,META,TSLA,JPM,GS,V,CAT,BA,XOM,CVX,WMT,COST,SBUX,KR,UNH,JNJ,LLY,DIS,NFLX,ADP,SFM"
     bot_cycle_interval_seconds: int = 60
     bot_use_structured_signals: bool = True
     bot_order_ttl_seconds: int = 180

@@ -100,7 +100,7 @@ class MarketDataValidator:
                     )
                 )
 
-            should_enforce_bar_continuity = True
+            should_enforce_bar_continuity = False
             if self.config.enforce_bar_continuity_only_during_regular_session:
                 should_enforce_bar_continuity = self._is_regular_trading_session(now)
             if should_enforce_bar_continuity:

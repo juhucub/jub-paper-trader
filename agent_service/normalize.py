@@ -7,8 +7,8 @@ from statistics import mean, pstdev
 
 def normalize_and_rank_signals(
     signals: dict[str, dict[str, float | str]],
-    top_n: int = 1,
-    bottom_n: int = 1,
+    top_n: int = 3,
+    bottom_n: int = 3,
     debug: bool = False,
 ) -> dict[str, dict[str, float | str]]:
     """Add z-score, rank, and bucket labels to signal payloads."""
@@ -45,5 +45,5 @@ def normalize_and_rank_signals(
         signal["rank"] = rank
         signal["rank_bucket"] = rank_bucket
         signal["universe_size"] = len(ranked_symbols)
-        
+
     return signals

@@ -310,7 +310,7 @@ class BotCycleService:
         #pull features per symbol via 30 1-minute bars, latest quote, and news sentiment (if available)
         features, decision_summaries = self._pull_features(symbols)
         signals = SignalGenerator().generate(features)
-        signals = normalize_and_rank_signals(signals, top_n=1, bottom_n=1)
+        signals = normalize_and_rank_signals(signals, top_n=3, bottom_n=3)
 
         for symbol, signal in signals.items():
             decision_summaries[symbol]["signal"] = signal
