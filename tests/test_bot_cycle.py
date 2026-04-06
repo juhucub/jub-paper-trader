@@ -173,6 +173,7 @@ def test_bot_cycle_keeps_exit_orders_when_entry_candidates_are_rejected():
 def test_bot_cycle_persists_exit_policy_actions_and_triggers():
     service, _, _ = _build_service()
     service.exit_policy.stop_loss_pct = 0.001
+    service.exit_policy.min_holding_minutes = 0
 
     result = service.run_cycle(["AAPL"])
 

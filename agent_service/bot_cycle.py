@@ -873,6 +873,8 @@ class BotCycleService:
         previous_payload: dict[str, Any],
     ) -> tuple[dict[str, dict[str, Any]], dict[str, float]]:
         previous_features: dict[str, dict[str, float]] = previous_payload.get("features", {})
+        previous_exit_state: dict[str, dict[str, Any]] = previous_payload.get("exit_policy_state", {})
+        minimum_hold_minutes = float(getattr(self.exit_policy, "min_holding_minutes", 0.0) or 0.0)
 
         actions: dict[str, dict[str, Any]] = {}
         adjusted = dict(base_target_weights)
@@ -891,16 +893,26 @@ class BotCycleService:
             current_score = (0.5 * feature_row.get("momentum", 0.0)) + (0.5 * feature_row.get("mean_reversion", 0.0))
             prev_row = previous_features.get(symbol, {})
             previous_score = (0.5 * float(prev_row.get("momentum", 0.0))) + (0.5 * float(prev_row.get("mean_reversion", 0.0)))
+            holding_minutes = self._holding_minutes_from_state(previous_exit_state.get(symbol, {}))
+            minimum_hold_satisfied = holding_minutes >= minimum_hold_minutes
 
             action = "hold"
             reason = "position_healthy"
             adjusted_target = base_target
 
-            if current_score < -0.01 or (previous_score > 0 and current_score <= 0):
+            if current_score < -0.05:
+                action = "close"
+                reason = "hard_negative_score_exit"
+                adjusted_target = 0.0
+            elif not minimum_hold_satisfied and base_target <= 0.0:
+                action = "hold"
+                reason = "minimum_hold_enforced"
+                adjusted_target = current_weight
+            elif minimum_hold_satisfied and (current_score < -0.01 or (previous_score > 0 and current_score <= 0)):
                 action = "close"
                 reason = "score_deterioration_vs_previous_snapshot"
                 adjusted_target = 0.0
-            elif current_score < 0.005 and current_weight > 0:
+            elif minimum_hold_satisfied and current_score < 0.0 and current_weight > 0:
                 action = "reduce"
                 reason = "weak_signal_keep_half_exposure"
                 adjusted_target = min(base_target, current_weight * 0.5)
@@ -914,8 +926,24 @@ class BotCycleService:
                 "adjusted_target_weight": adjusted_target,
                 "current_score": current_score,
                 "previous_score": previous_score,
+                "holding_minutes": holding_minutes,
+                "minimum_hold_satisfied": minimum_hold_satisfied,
             }
         return actions, adjusted
+
+    @staticmethod
+    def _holding_minutes_from_state(previous_row: dict[str, Any]) -> float:
+        first_seen_at_raw = previous_row.get("first_seen_at")
+        if not isinstance(first_seen_at_raw, str):
+            return 0.0
+        try:
+            first_seen_at = datetime.fromisoformat(first_seen_at_raw)
+        except ValueError:
+            return 0.0
+        if first_seen_at.tzinfo is None:
+            first_seen_at = first_seen_at.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return max(0.0, (now - first_seen_at).total_seconds() / 60.0)
 
     @staticmethod
     def _signal_strength(signal: dict[str, float | str]) -> float:
