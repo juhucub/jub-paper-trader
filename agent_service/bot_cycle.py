@@ -397,6 +397,7 @@ class BotCycleService:
             features=features,
             equity=equity,
             previous_payload=previous_payload,
+            exit_policy_actions=exit_policy_actions,
         )
         sized_targets = self.position_sizer.size_targets(
             target_weights=adjusted_target_weights,
@@ -871,10 +872,12 @@ class BotCycleService:
         features: dict[str, dict[str, float]],
         equity: float,
         previous_payload: dict[str, Any],
+        exit_policy_actions: dict[str, dict[str, Any]] | None = None,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, float]]:
         previous_features: dict[str, dict[str, float]] = previous_payload.get("features", {})
         previous_exit_state: dict[str, dict[str, Any]] = previous_payload.get("exit_policy_state", {})
         minimum_hold_minutes = float(getattr(self.exit_policy, "min_holding_minutes", 0.0) or 0.0)
+        position_actions = exit_policy_actions or {}
 
         actions: dict[str, dict[str, Any]] = {}
         adjusted = dict(base_target_weights)
@@ -893,8 +896,11 @@ class BotCycleService:
             current_score = (0.5 * feature_row.get("momentum", 0.0)) + (0.5 * feature_row.get("mean_reversion", 0.0))
             prev_row = previous_features.get(symbol, {})
             previous_score = (0.5 * float(prev_row.get("momentum", 0.0))) + (0.5 * float(prev_row.get("mean_reversion", 0.0)))
-            holding_minutes = self._holding_minutes_from_state(previous_exit_state.get(symbol, {}))
+            holding_minutes = float(position_actions.get(symbol, {}).get("holding_minutes", 0.0) or 0.0)
+            if holding_minutes <= 0.0:
+                holding_minutes = self._holding_minutes_from_state(previous_exit_state.get(symbol, {}))
             minimum_hold_satisfied = holding_minutes >= minimum_hold_minutes
+            score_delta = current_score - previous_score
 
             action = "hold"
             reason = "position_healthy"
@@ -908,7 +914,10 @@ class BotCycleService:
                 action = "hold"
                 reason = "minimum_hold_enforced"
                 adjusted_target = current_weight
-            elif minimum_hold_satisfied and (current_score < -0.01 or (previous_score > 0 and current_score <= 0)):
+            elif minimum_hold_satisfied and (
+                (current_score <= -0.02 and previous_score <= -0.01)
+                or (previous_score >= 0.03 and current_score <= -0.02 and score_delta <= -0.04)
+            ):
                 action = "close"
                 reason = "score_deterioration_vs_previous_snapshot"
                 adjusted_target = 0.0
@@ -926,6 +935,7 @@ class BotCycleService:
                 "adjusted_target_weight": adjusted_target,
                 "current_score": current_score,
                 "previous_score": previous_score,
+                "score_delta": score_delta,
                 "holding_minutes": holding_minutes,
                 "minimum_hold_satisfied": minimum_hold_satisfied,
             }
