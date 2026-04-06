@@ -56,8 +56,7 @@ class ExecutionRouter:
             else:
                 notional_delta = weight_delta * equity
 
-            is_full_exit = current_qty > 0.0 and target_weight <= 0.0
-            if not is_full_exit and abs(weight_delta) < self.rebalance_tolerance_pct:
+            if abs(weight_delta) < self.rebalance_tolerance_pct:
                 continue
 
             if abs(notional_delta) < self.min_trade_notional:
