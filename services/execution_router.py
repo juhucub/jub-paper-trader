@@ -18,6 +18,7 @@ class RebalanceDelta:
 @dataclass(slots=True)
 class ExecutionRouter:
     min_trade_notional: float = 20.0
+    rebalance_tolerance_pct: float = 0.02
 
     def to_rebalance_deltas(
         self,
@@ -44,6 +45,7 @@ class ExecutionRouter:
             current_qty = float(current_positions.get(symbol, 0.0))
             current_weight = (current_qty * price) / equity
             target_weight = float(target_weights.get(symbol, 0.0))
+            weight_delta = target_weight - current_weight
 
             if symbol in target_qtys:
                 desired_qty = float(target_qtys[symbol])
@@ -52,7 +54,11 @@ class ExecutionRouter:
                 desired_notional = float(target_notionals[symbol])
                 notional_delta = desired_notional - (current_qty * price)
             else:
-                notional_delta = (target_weight - current_weight) * equity
+                notional_delta = weight_delta * equity
+
+            is_full_exit = current_qty > 0.0 and target_weight <= 0.0
+            if not is_full_exit and abs(weight_delta) < self.rebalance_tolerance_pct:
+                continue
 
             if abs(notional_delta) < self.min_trade_notional:
                 continue

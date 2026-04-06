@@ -12,6 +12,7 @@ class ExitPolicy:
     take_profit_reduce_pct: float = 0.03
     take_profit_exit_pct: float = 0.06
     max_holding_minutes: int = 180
+    min_holding_minutes: int = 15
     deterioration_signal_floor: float = 0.002
     deterioration_drop_pct: float = 0.5
     add_signal_threshold: float = 0.03
@@ -49,6 +50,7 @@ class ExitPolicy:
             previous_row = previous_state.get(symbol, {}) or {}
             first_seen_at = self._resolve_first_seen_at(position, previous_row, now)
             holding_minutes = max(0.0, (now - first_seen_at).total_seconds() / 60.0)
+            minimum_hold_satisfied = holding_minutes >= self.min_holding_minutes
 
             avg_entry_price = float(getattr(position, "avg_entry_price", 0.0) or 0.0)
             if avg_entry_price <= 0.0:
@@ -71,15 +73,15 @@ class ExitPolicy:
                 action, trigger, trigger_type = "EXIT", "stop_loss", "risk"
             elif max_adverse_excursion >= self.max_adverse_excursion_pct:
                 action, trigger, trigger_type = "REDUCE", "max_adverse_excursion", "risk"
-            elif pnl_pct >= self.take_profit_exit_pct:
+            elif pnl_pct >= self.take_profit_exit_pct and minimum_hold_satisfied:
                 action, trigger, trigger_type = "EXIT", "take_profit_exit_band", "profit"
-            elif pnl_pct >= self.take_profit_reduce_pct:
+            elif pnl_pct >= self.take_profit_reduce_pct and minimum_hold_satisfied:
                 action, trigger, trigger_type = "REDUCE", "take_profit_reduce_band", "profit"
             elif holding_minutes >= self.max_holding_minutes:
                 action, trigger, trigger_type = "EXIT", "max_holding_time", "time"
-            elif deterioration_trigger:
+            elif deterioration_trigger and minimum_hold_satisfied:
                 action, trigger, trigger_type = "REDUCE", "signal_deterioration", "signal"
-            elif current_strength >= self.add_signal_threshold:
+            elif current_strength >= self.add_signal_threshold and minimum_hold_satisfied:
                 action, trigger, trigger_type = "ADD", "strong_signal_continuation", "signal"
 
             actions[symbol] = {

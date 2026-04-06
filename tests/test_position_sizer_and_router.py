@@ -46,3 +46,15 @@ def test_execution_router_prefers_precomputed_target_qtys():
     assert deltas[0].symbol == "AAPL"
     assert deltas[0].side == "buy"
     assert deltas[0].qty == 4.0
+
+
+def test_execution_router_skips_small_rebalance_changes():
+    router = ExecutionRouter(min_trade_notional=10.0, rebalance_tolerance_pct=0.02)
+    deltas = router.to_rebalance_deltas(
+        target_weights={"AAPL": 0.105},
+        current_positions={"AAPL": 10.0},
+        latest_prices={"AAPL": 100.0},
+        equity=10_000.0,
+    )
+
+    assert deltas == []
