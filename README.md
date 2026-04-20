@@ -40,23 +40,6 @@ python -m scheduler.runner --symbols AAPL,MSFT,NVDA --interval-seconds 60
 uvicorn backend.map:app --reload
 ```
 
-## 4.1) Codex Repo Guidance
-
-This repo now includes repo-local Codex scaffolding:
-
-- `AGENTS.md` defines the two-intelligence model and six-layer architecture
-- `.codex/skills/` contains repo-specific skills for architecture, signal/scenario work, allocation-risk handoffs, and execution-monitoring work
-- `.codex/subagents/` contains focused role files for cross-layer planning, statistical research, deterministic safety, and monitoring validation
-- `agent_service/interfaces/contracts.py` defines typed handoff objects for:
-  - `SignalBundle`
-  - `ScenarioBundle`
-  - `AllocationProposal`
-  - `RiskAdjustedAllocation`
-  - `OrderProposal`
-  - `MonitoringDecision`
-
-Use these typed contracts when extending the orchestration flow so model proposals, deterministic vetoes, and monitoring outputs stay auditable.
-
 ## 5) Visualization Code Flow GOAL
 
 ### 1) Raw Market Data - alpaca_data.py
