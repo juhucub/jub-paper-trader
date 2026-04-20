@@ -25,7 +25,7 @@ pip install -e .
 Single validation cycle:
 
 ```bash
-python -m scheduler.runner --symbols AAPL,MSFT,NVDA --once
+python -m scheduler.runner --symbols AAPL,MSFT,NVDA,AMZN,GOOG,META,TSLA,JPM,GS,V,CAT,BA,XOM,CVX,WMT,COST,SBUX,KR,UNH,JNJ,LLY,DIS,NFLX,ADP,SFM --once
 ```
 
 Continous min-by-min loop:

@@ -17,6 +17,9 @@ dependencies = [
   "httpx>=0.27.0",
 ]
 
+[project.scripts]
+jub-bot = "scheduler.runner:main"
+
 [tool.setuptools]
 packages = [
   "backend",
@@ -27,6 +30,7 @@ packages = [
   "agent_service.interfaces",
   "db",
   "db.models",
+  "db.repositories",
   "db.migrations",
   "services",
   "scheduler",

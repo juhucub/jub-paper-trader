@@ -1,0 +1,5 @@
+Generic single-database configuration.
+
+Ran alembic init db/migrations 
+configured sqlalchemy.url in alembic.ini
+pointed target_metadata to db.base.Base.metadata
