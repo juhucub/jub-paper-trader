@@ -13,12 +13,21 @@ class RebalanceDelta:
     target_weight: float
     current_weight: float
     reference_price: float
+    current_qty: float = 0.0
+    desired_qty: float = 0.0
+    notional_delta: float = 0.0
 
 
 @dataclass(slots=True)
 class ExecutionRouter:
     min_trade_notional: float = 20.0
     rebalance_tolerance_pct: float = 0.02
+
+    @staticmethod
+    def build_execution_plan(deltas: list[RebalanceDelta]) -> list[RebalanceDelta]:
+        """Sell first so risk-reducing orders free capital before new buys."""
+
+        return sorted(deltas, key=lambda delta: (0 if delta.side == "sell" else 1, delta.symbol))
 
     def to_rebalance_deltas(
         self,
@@ -72,7 +81,10 @@ class ExecutionRouter:
                     target_weight=target_weight,
                     current_weight=current_weight,
                     reference_price=price,
+                    current_qty=current_qty,
+                    desired_qty=float(target_qtys.get(symbol, current_qty + qty_delta if side == "buy" else max(current_qty - qty_delta, 0.0))),
+                    notional_delta=notional_delta,
                 )
             )
 
-        return sorted(deltas, key=lambda x: (x.symbol, x.side))
+        return self.build_execution_plan(deltas)

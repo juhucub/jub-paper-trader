@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from statistics import mean, pstdev
+from typing import Any
 
 
 def normalize_and_rank_signals(
-    signals: dict[str, dict[str, float | str]],
+    signals: dict[str, dict[str, Any]],
     top_n: int = 3,
     bottom_n: int = 3,
     debug: bool = False,
-) -> dict[str, dict[str, float | str]]:
+) -> dict[str, dict[str, Any]]:
     """Add z-score, rank, and bucket labels to signal payloads."""
 
     if not signals:
@@ -21,7 +22,7 @@ def normalize_and_rank_signals(
     avg_score = mean(score_values)
     std_score = pstdev(score_values) if len(score_values) > 1 else 0.0
 
-    ranked_symbols = sorted(raw_scores, key=raw_scores.get, reverse=True)
+    ranked_symbols = sorted(raw_scores, key=lambda symbol: raw_scores[symbol], reverse=True)
     buy_cutoff = min(top_n, len(ranked_symbols))
     sell_cutoff = min(bottom_n, len(ranked_symbols))
 

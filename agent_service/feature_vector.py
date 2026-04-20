@@ -55,6 +55,7 @@ class FeatureVector:
             "sentiment_score": float(sentiment_score),
         }
 
+    @staticmethod
     def _endpoint_return(closes: list[float], lookback_bars: int) -> float:
         if len(closes) < 2:
             return 0.0

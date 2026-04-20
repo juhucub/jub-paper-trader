@@ -26,8 +26,9 @@ def run_forever(container: AppContainer, symbols: list[str], interval_seconds: i
     while True:
         result = run_once(container, symbols)
         print(
-            f"cycle={result['cycle_id']} submitted={result['submitted_order_count']} "
-            f"blocked={result['blocked_order_count']}"
+            f"cycle={result['cycle_id']} status={result.get('status', 'unknown')} "
+            f"submitted={result['submitted_order_count']} blocked={result['blocked_order_count']} "
+            f"next={result.get('next_action', 'continue')}"
         )
         time.sleep(interval_seconds)
 

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from agent_service.bot_cycle import BotCycleService
+from agent_service.interfaces import CycleReport
 
 @dataclass(slots=True)
 class BotScheduler: 
@@ -14,8 +15,20 @@ class BotScheduler:
     def run_minute(self, symbols: list[str]) -> dict[str, Any]:
         #run a single bot cycle for a given symbol
         result = self.orchestration_service.run_cycle(symbols)
-        
-        #Return broker summary for cycle_id
+        cycle_report = result.get("cycle_report")
+        if isinstance(cycle_report, CycleReport):
+            return {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "symbols": symbols,
+                "cycle_id": cycle_report.cycle_id,
+                "submitted_order_count": cycle_report.submitted_order_count,
+                "blocked_order_count": cycle_report.blocked_order_count,
+                "status": cycle_report.status,
+                "summary": cycle_report.summary,
+                "next_action": cycle_report.next_action,
+                "cycle_report": cycle_report,
+            }
+
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "symbols": symbols,

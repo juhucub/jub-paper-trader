@@ -46,6 +46,7 @@ def test_execution_router_prefers_precomputed_target_qtys():
     assert deltas[0].symbol == "AAPL"
     assert deltas[0].side == "buy"
     assert deltas[0].qty == 4.0
+    assert deltas[0].desired_qty == 5.0
 
 
 def test_execution_router_skips_small_rebalance_changes():
@@ -58,3 +59,17 @@ def test_execution_router_skips_small_rebalance_changes():
     )
 
     assert deltas == []
+
+
+def test_execution_router_emits_sell_first_execution_plan():
+    router = ExecutionRouter(min_trade_notional=10.0, rebalance_tolerance_pct=0.0)
+    deltas = router.to_rebalance_deltas(
+        target_weights={"AAPL": 0.00, "MSFT": 0.20},
+        current_positions={"AAPL": 10.0, "MSFT": 0.0},
+        latest_prices={"AAPL": 100.0, "MSFT": 100.0},
+        equity=10_000.0,
+    )
+
+    assert [delta.side for delta in deltas] == ["sell", "buy"]
+    assert deltas[0].symbol == "AAPL"
+    assert deltas[1].symbol == "MSFT"

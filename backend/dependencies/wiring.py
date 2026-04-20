@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from agent_service.bot_cycle import BotCycleService
 from agent_service.data_quality import DataQualityConfig, MarketDataValidator
 from agent_service.optimizer_qpo import OptimizerQPO
+from agent_service.replay import SnapshotBacktestHook
 from agent_service.strategy import StrategyDefinition, StrategyRegistry
 from backend.core.settings import Settings, get_settings
 from db.base import SessionLocal
@@ -80,7 +81,12 @@ def build_container() -> AppContainer:
 
     strategy_registry = StrategyRegistry()
     strategy_registry.register(
-        StrategyDefinition(name="v1_momentum_mean_reversion", signal_modes=("momentum", "mean_reversion"), benchmark_symbol="SPY")
+        StrategyDefinition(
+            name="v1_momentum_mean_reversion",
+            signal_modes=("momentum", "mean_reversion"),
+            benchmark_symbol="SPY",
+            backtest_hook=SnapshotBacktestHook(db_session=db_session),
+        )
     )
     
     return AppContainer(

@@ -20,7 +20,8 @@ class AlpacaAccount:
     status: str
     currency: str
     buying_power: float
-    equity: float 
+    equity: float
+    cash: float | None = None
 
 @dataclass(slots=True)
 class AlpacaPosition:
@@ -82,6 +83,7 @@ class AlpacaClient:
             currency=payload.get("currency", "USD"),
             buying_power=_to_float(payload.get("buying_power"), field_name="buying_power"),
             equity=_to_float(payload.get("equity"), field_name="equity"),
+            cash=_to_optional_float(payload.get("cash")),
         )
 
     def get_positions(self) -> list[AlpacaPosition]:
@@ -271,4 +273,3 @@ def _to_optional_float(value: Any) -> float | None:
     if value is None:
         return None
     return float(value)
-

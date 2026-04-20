@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from typing import Any, cast
 
+from agent_service.interfaces import ReconciliationResult
 from db.base import Base
 from db.models.portfolio import PortfolioAccountState, TradeHistory
 from db.models.positions import Position
@@ -20,7 +22,7 @@ def _build_engine() -> PortfolioEngine:
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine, future=True)()
     return PortfolioEngine(
-        alpaca_client=FakeAlpacaClient(),
+        alpaca_client=cast(Any, FakeAlpacaClient()),
         risk_guardrails=RiskGuardrails(),
         db_session=session,
     )
@@ -29,14 +31,15 @@ def _build_engine() -> PortfolioEngine:
 def test_sync_and_mark_to_market_tracks_equity_drawdown_and_exposure():
     pe = _build_engine()
 
-    exposure = pe.sync_account_state(
+    reconciliation = pe.sync_account_state(
         account={"cash": 10_000.0, "equity": 10_000.0},
         positions=[{"symbol": "AAPL", "qty": 10, "avg_entry_price": 100.0, "current_price": 110.0}],
         orders=[],
     )
 
-    assert exposure["open_positions"] == 1.0
-    assert exposure["largest_position_pct"] > 0
+    assert isinstance(reconciliation, ReconciliationResult)
+    assert reconciliation.account_state["open_positions"] == 1.0
+    assert reconciliation.account_state["largest_position_pct"] > 0
 
     unrealized = pe.mark_to_market({"AAPL": 90.0})
     eq = pe.recalculate_equity()
@@ -45,7 +48,7 @@ def test_sync_and_mark_to_market_tracks_equity_drawdown_and_exposure():
     assert unrealized == -100.0
     assert eq == 10_900.0
     assert acct is not None
-    assert acct.max_drawdown == 200.0
+    assert acct.max_drawdown == 0.0
 
 
 def test_apply_fill_updates_cash_realized_pnl_and_trade_history():
@@ -68,3 +71,20 @@ def test_apply_fill_updates_cash_realized_pnl_and_trade_history():
     assert round(acct.cash, 2) == 10_480.0
     assert round(result["realized_pnl"], 2) == 80.0
     assert len(trades) == 1
+
+
+def test_sync_account_state_keeps_broker_equity_authoritative() -> None:
+    pe = _build_engine()
+
+    reconciliation = pe.sync_account_state(
+        account={"cash": 8_000.0, "buying_power": 12_000.0, "equity": 15_000.0},
+        positions=[{"symbol": "AAPL", "qty": 10, "avg_entry_price": 100.0, "current_price": 110.0}],
+        orders=[],
+    )
+
+    acct = pe.db_session.get(PortfolioAccountState, 1)
+    assert acct is not None
+    assert reconciliation.account_state["equity"] == 15_000.0
+    assert acct.equity == 15_000.0
+    assert reconciliation.diagnostics["broker_equity_authoritative"] is True
+    assert round(reconciliation.account_state["largest_position_pct"], 4) == round(1100.0 / 15_000.0, 4)

@@ -1,6 +1,9 @@
 from functools import lru_cache
+from typing import Any
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
     env: str = "dev"
@@ -33,6 +36,31 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    @field_validator(
+        "debug",
+        "debug_bot_cycle",
+        "bot_use_structured_signals",
+        "bot_order_replace_enabled",
+        "bot_enforce_quote_freshness_only_during_trading_session",
+        mode="before",
+    )
+    @classmethod
+    def normalize_boolean_env(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "debug", "dev", "development"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "release", "prod", "production"}:
+            return False
+        return value
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+
+
+def clear_settings_cache() -> None:
+    get_settings.cache_clear()

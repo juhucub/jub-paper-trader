@@ -24,8 +24,10 @@ class DataQualityIssue:
 class DataQualityConfig:
     min_bar_count: int = 20
     expected_bar_interval_seconds: int = 60
+    max_bar_age_seconds: int = 180
     max_quote_age_seconds: int = 1200
     max_price_jump_pct: float = 0.2
+    enforce_bar_freshness_only_during_trading_session: bool = True
     enforce_quote_freshness_only_during_trading_session: bool = True
     enforce_bar_continuity_only_during_regular_session: bool = True
 
@@ -41,7 +43,7 @@ class MarketDataValidator:
         quote: dict[str, Any],
         now_utc: datetime | None = None,
     ) -> list[DataQualityIssue]:
-        now = now_utc or datetime.now(timezone.utc)
+        now = self._normalize_datetime(now_utc or datetime.now(timezone.utc))
         issues: list[DataQualityIssue] = []
 
         if len(bars) < self.config.min_bar_count:
@@ -77,6 +79,13 @@ class MarketDataValidator:
         for bar in bars:
             raw_timestamp = bar.get("t")
             if raw_timestamp is None:
+                issues.append(
+                    DataQualityIssue(
+                        code="invalid_timestamp",
+                        message="Bar timestamp is missing.",
+                        metadata={"symbol": symbol, "field": "bar.t"},
+                    )
+                )
                 continue
             parsed_timestamp = self._parse_timestamp(raw_timestamp)
             if parsed_timestamp is None:
@@ -90,6 +99,7 @@ class MarketDataValidator:
                 continue
             bar_timestamps.append(parsed_timestamp)
 
+        latest_bar_timestamp = bar_timestamps[-1] if bar_timestamps else None
         if bar_timestamps:
             if any(left >= right for left, right in zip(bar_timestamps, bar_timestamps[1:])):
                 issues.append(
@@ -120,6 +130,40 @@ class MarketDataValidator:
                             )
                         )
                         break
+
+        should_enforce_bar_freshness = True
+        if self.config.enforce_bar_freshness_only_during_trading_session:
+            should_enforce_bar_freshness = self._is_regular_trading_session(now)
+        if latest_bar_timestamp is None and should_enforce_bar_freshness:
+            issues.append(
+                DataQualityIssue(
+                    code="invalid_timestamp",
+                    message="Latest bar timestamp is unavailable.",
+                    metadata={"symbol": symbol, "field": "bar.t"},
+                )
+            )
+        elif latest_bar_timestamp is not None and should_enforce_bar_freshness:
+            bar_age_seconds = int((now - latest_bar_timestamp).total_seconds())
+            if bar_age_seconds < 0:
+                issues.append(
+                    DataQualityIssue(
+                        code="invalid_timestamp",
+                        message="Latest bar timestamp is in the future.",
+                        metadata={"symbol": symbol, "field": "bar.t", "bar_age_seconds": bar_age_seconds},
+                    )
+                )
+            elif bar_age_seconds > self.config.max_bar_age_seconds:
+                issues.append(
+                    DataQualityIssue(
+                        code="stale_bar",
+                        message="Latest bar is stale.",
+                        metadata={
+                            "symbol": symbol,
+                            "bar_age_seconds": bar_age_seconds,
+                            "max_bar_age_seconds": self.config.max_bar_age_seconds,
+                        },
+                    )
+                )
 
         closes = [float(bar.get("c", 0.0)) for bar in bars if bar.get("c") is not None]
         if any(price <= 0.0 for price in closes):
@@ -159,13 +203,52 @@ class MarketDataValidator:
                     metadata={"symbol": symbol, "field": "quote.t", "value": str(quote_time_raw)},
                 )
             )
-        #FIXME: ENFORCE DATA FRESHNESS
         should_enforce_quote_freshness = True
         if self.config.enforce_quote_freshness_only_during_trading_session:
             should_enforce_quote_freshness = self._is_regular_trading_session(now)
         if quote_time is not None and should_enforce_quote_freshness:
+            if latest_bar_timestamp is not None:
+                quote_bar_delta_seconds = int((quote_time - latest_bar_timestamp).total_seconds())
+                if quote_bar_delta_seconds < 0:
+                    issues.append(
+                        DataQualityIssue(
+                            code="quote_bar_misalignment",
+                            message="Quote timestamp trails the latest bar timestamp.",
+                            metadata={
+                                "symbol": symbol,
+                                "quote_time": quote_time.isoformat(),
+                                "latest_bar_time": latest_bar_timestamp.isoformat(),
+                                "delta_seconds": quote_bar_delta_seconds,
+                            },
+                        )
+                    )
+                elif quote_bar_delta_seconds > self.config.expected_bar_interval_seconds:
+                    issues.append(
+                        DataQualityIssue(
+                            code="quote_bar_misalignment",
+                            message="Quote timestamp leads the latest bar timestamp by too much.",
+                            metadata={
+                                "symbol": symbol,
+                                "quote_time": quote_time.isoformat(),
+                                "latest_bar_time": latest_bar_timestamp.isoformat(),
+                                "delta_seconds": quote_bar_delta_seconds,
+                                "max_delta_seconds": self.config.expected_bar_interval_seconds,
+                            },
+                        )
+                    )
             quote_age_seconds = int((now - quote_time).total_seconds())
-            if quote_age_seconds > self.config.max_quote_age_seconds:
+            if quote_age_seconds < 0:
+                issues.append(
+                    DataQualityIssue(
+                        code="invalid_timestamp",
+                        message="Quote timestamp is in the future.",
+                        metadata={"symbol": symbol, "field": "quote.t", "quote_age_seconds": quote_age_seconds},
+                    )
+                )
+            elif (
+                quote_age_seconds > self.config.max_quote_age_seconds
+                and (latest_bar_timestamp is None or quote_time != latest_bar_timestamp)
+            ):
                 issues.append(
                     DataQualityIssue(
                         code="stale_quote",
@@ -204,34 +287,31 @@ class MarketDataValidator:
         if value is None:
             return None
         if isinstance(value, datetime):
-            if value.tzinfo is None:
-                return value.replace(tzinfo=timezone.utc)
-            return value.astimezone(timezone.utc)
+            return MarketDataValidator._normalize_datetime(value)
         if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+            try:
+                return datetime.fromtimestamp(float(value), tz=timezone.utc)
+            except (OverflowError, OSError, ValueError):
+                return None
         if isinstance(value, str):
             try:
                 normalized = value.replace("Z", "+00:00")
                 parsed = datetime.fromisoformat(normalized)
             except ValueError:
                 return None
-            if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=timezone.utc)
-            return parsed.astimezone(timezone.utc)
+            return MarketDataValidator._normalize_datetime(parsed)
         return None
 
     @staticmethod
     def _is_regular_trading_session(now_utc: datetime) -> bool:
-        now_et = now_utc.astimezone(ZoneInfo("America/New_York"))
-        if now_et.weekday() >= 5:
-            return False
-        minutes_since_midnight = (now_et.hour * 60) + now_et.minute
-        return (4 * 60) <= minutes_since_midnight < (20 * 60)
-
-    @staticmethod
-    def _is_regular_trading_session(now_utc: datetime) -> bool:
-        now_et = now_utc.astimezone(ZoneInfo("America/New_York"))
+        now_et = MarketDataValidator._normalize_datetime(now_utc).astimezone(ZoneInfo("America/New_York"))
         if now_et.weekday() >= 5:
             return False
         minutes_since_midnight = (now_et.hour * 60) + now_et.minute
         return (9 * 60 + 30) <= minutes_since_midnight < (16 * 60)
+
+    @staticmethod
+    def _normalize_datetime(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)

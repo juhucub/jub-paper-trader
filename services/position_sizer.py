@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import floor
-from typing import Any
+
+from agent_service.interfaces import AllocationLine, AllocationProposal, SignalBundle
 
 
 @dataclass(slots=True)
@@ -16,6 +17,65 @@ class PositionSizer:
     max_position_pct: float = 0.20
     max_leverage: float = 1.0
     max_sector_pct: float = 0.35
+
+    def size_allocation(
+        self,
+        proposal: AllocationProposal,
+        signal_bundle: SignalBundle,
+        current_positions: dict[str, float],
+        latest_prices: dict[str, float],
+        feature_rows: dict[str, dict[str, float]],
+        equity: float,
+        sector_map: dict[str, str] | None = None,
+    ) -> AllocationProposal:
+        signal_lookup: dict[str, dict[str, float | str]] = {
+            intent.symbol: {
+                "confidence": intent.confidence,
+                "score": intent.score,
+                "normalized_score": intent.normalized_score,
+                "rank": intent.rank,
+            }
+            for intent in signal_bundle.intents
+        }
+        sized_targets = self.size_targets(
+            target_weights={line.symbol: line.target_weight for line in proposal.lines},
+            signals=signal_lookup,
+            current_positions=current_positions,
+            latest_prices=latest_prices,
+            feature_rows=feature_rows,
+            equity=equity,
+            sector_map=sector_map,
+        )
+        sized_lines = [
+            AllocationLine(
+                symbol=line.symbol,
+                target_weight=line.target_weight,
+                confidence=line.confidence,
+                rationale=line.rationale,
+                target_notional=float(sized_targets.get(line.symbol, {}).get("target_notional", 0.0)),
+                target_qty=float(sized_targets.get(line.symbol, {}).get("target_qty", 0.0)),
+                diagnostics={
+                    **line.diagnostics,
+                    **sized_targets.get(line.symbol, {}),
+                },
+            )
+            for line in proposal.lines
+        ]
+        return AllocationProposal(
+            as_of=proposal.as_of,
+            source_signal_bundle_at=proposal.source_signal_bundle_at,
+            source_scenario_bundle_at=proposal.source_scenario_bundle_at,
+            source_decision_policy_at=proposal.source_decision_policy_at,
+            source_exit_policy_at=proposal.source_exit_policy_at,
+            target_gross_exposure=proposal.target_gross_exposure,
+            cash_buffer=proposal.cash_buffer,
+            lines=sized_lines,
+            scenario_regime=proposal.scenario_regime,
+            optimizer_name=proposal.optimizer_name,
+            constraints_requested=dict(proposal.constraints_requested),
+            diagnostics={**proposal.diagnostics, "sized_targets": sized_targets},
+            lineage=dict(proposal.lineage),
+        )
 
     def size_targets(
         self,

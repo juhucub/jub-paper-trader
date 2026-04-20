@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from agent_service.interfaces import ReplayEvaluation
 from agent_service.interfaces.signals import Signal, SignalProvider
 
 @dataclass(slots=True)
@@ -23,7 +24,7 @@ class StrategyEngine:
         return signal
     
 class BacktestHook(Protocol):
-    def run(self, strategy_name: str, symbols: list[str], benchmark_symbol: str) -> dict[str, Any]:
+    def run(self, strategy_name: str, symbols: list[str], benchmark_symbol: str) -> ReplayEvaluation | dict[str, Any]:
         ...
 
 
@@ -50,7 +51,7 @@ class StrategyRegistry:
     def list(self) -> list[StrategyDefinition]:
         return list(self._registry.values())
 
-    def run_backtest(self, strategy_name: str, symbols: list[str]) -> dict[str, Any]:
+    def run_backtest(self, strategy_name: str, symbols: list[str]) -> ReplayEvaluation | dict[str, Any]:
         definition = self.get(strategy_name)
         if definition.backtest_hook is None:
             return {
@@ -59,4 +60,3 @@ class StrategyRegistry:
                 "status": "missing_backtest_hook",
             }
         return definition.backtest_hook.run(strategy_name, symbols, definition.benchmark_symbol)
-
